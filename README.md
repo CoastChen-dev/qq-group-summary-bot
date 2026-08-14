@@ -8,7 +8,10 @@
 - 实时接收群消息并持久化到 `data/messages/<群号>/<日期>.jsonl`
 - 群里发「@机器人 总结 / @机器人 /总结 / @机器人 #总结」可手动触发概括（**必须 @ 机器人**，防止误触发）
 - **AI 群聊**：群里 @机器人 说其他内容时，调用 DeepSeek 以群友身份回复（带上下文记忆，每群保留最近 N 条）
-- **PRTS.Wiki 知识库**：AI 群聊回答时会自动检索 [PRTS.Wiki](https://prts.wiki)（明日方舟 Wiki），把相关词条作为参考注入，能回答明日方舟相关问题
+- **三级知识库**：回答时自动检索资料，覆盖新信息与社区梗/黑话
+  - **本地梗词典** `data/lingo.json`：可手动维护 + 命中即用（最快）
+  - **PRTS.Wiki**：明日方舟数据（干员/关卡/机制）
+  - **萌娘百科**：社区梗/黑话/文化词条（如"轮椅轴"、"明日方舟/梗"）
 - **每日 9:00** 自动统计昨日各群消息，将「昨日活跃群（≥100 条）日报」**私聊发送**给指定 QQ
 - **静默时段**（默认 0:00-8:00）：不响应任何总结请求
 - **离线补偿**：每次启动时自动从**上次下线时刻**（持久化的最后在线时间）拉取错过的历史消息，重启/掉线也能补齐
@@ -25,8 +28,10 @@ src/
   napcat.js     OneBot 11 正向 WebSocket 客户端
   store.js      消息存储 / 持久化 / 时段提取
   summarizer.js LLM（OpenAI 兼容接口）概括器
-  chat.js       AI 群聊（带上下文记忆 + PRTS.Wiki 检索）
+  chat.js       AI 群聊（带上下文记忆 + 三级知识库）
   wiki.js       PRTS.Wiki 检索器（MediaWiki API）
+  moegirl.js    萌娘百科检索器（社区梗/黑话）
+  lingo.js      本地梗词典（可维护 + 学习）
   scheduler.js  定时调度器
   filter.js     敏感内容过滤
   logger.js     日志
@@ -72,7 +77,9 @@ cp config.example.json config.json   # 复制模板
 - `llm.chatHistoryLimit`：每群保留的上下文条数（默认 12）
 - `llm.defaultReply`：AI 调用失败时的兜底回复
 - `llm.wikiEnabled`：PRTS.Wiki 知识库开关（默认 `true`）
-- `llm.wikiApiUrl` / `wikiMaxResults` / `wikiMaxCharPerPage` / `wikiTopK`：知识库检索参数
+- `llm.wikiApiUrl` / `wikiMaxResults` / `wikiMaxCharPerPage` / `wikiTopK`：PRTS.Wiki 检索参数
+- `llm.moegirlEnabled` / `moegirlMaxCharPerPage` / `moegirlTopK`：萌娘百科检索参数
+- `llm.lingoFile`：本地梗词典文件路径（默认 `data/lingo.json`，可手动编辑维护）
 - `schedule`：日报任务时间（`hour`/`minute`，默认 9:00）
 - `minMessages`：手动总结低于该消息条数时跳过
 - `report`：日报配置

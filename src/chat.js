@@ -1,5 +1,7 @@
 import { log } from './logger.js';
 import { WikiRetriever, isArknightsRelated } from './wiki.js';
+import { MoegirlRetriever } from './moegirl.js';
+import { LingoStore } from './lingo.js';
 
 export class ChatBot {
   constructor(cfg = {}) {
@@ -11,6 +13,8 @@ export class ChatBot {
     this.enabled = cfg.chatEnabled !== false;
     this.defaultReply = cfg.defaultReply ?? '抱歉，我现在不方便回复，稍后再试试吧~';
     this.wiki = new WikiRetriever(cfg);
+    this.moegirl = new MoegirlRetriever(cfg);
+    this.lingo = new LingoStore(cfg.lingoFile);
 
     this.groupHistory = new Map();
   }
@@ -43,7 +47,7 @@ export class ChatBot {
 
     let userContent = `${userName}：${question}`;
     if (wikiContext) {
-      userContent += `\n\n以下是与问题相关的 Wiki 资料，可参考其中的事实（如有）：\n${wikiContext}`;
+      userContent += `\n\n以下是检索到的相关资料，可参考其中的事实与梗文化（如有不相关可忽略）：\n${wikiContext}`;
     }
     messages.push({ role: 'user', content: userContent });
     return messages;
@@ -52,22 +56,44 @@ export class ChatBot {
   async chat(groupId, userName, question) {
     if (!this.enabled) return null;
 
-    let wikiContext = '';
-    let sources = [];
-    if (isArknightsRelated(question)) {
-      try {
-        const r = await this.wiki.retrieve(question);
-        wikiContext = r.context;
-        sources = r.sources;
-        if (sources.length > 0) log(`[chat] 群 ${groupId} 检索到方舟资料: ${sources.join(', ')}`);
-      } catch (e) {
-        log(`[chat] wiki 检索失败: ${e.message}`);
-      }
-    } else {
-      log(`[chat] 群 ${groupId} 问题与方舟无关，跳过 wiki 检索`);
+    const knowledgeParts = [];
+    const lingoHit = this.lingo.lookup(question);
+    const isArk = isArknightsRelated(question) || !!lingoHit;
+
+    // 1. 本地词典（梗/黑话，最快）
+    if (lingoHit) {
+      knowledgeParts.push(`【本地梗词典】${lingoHit.term}：${lingoHit.meaning}`);
+      log(`[chat] 群 ${groupId} 命中本地词典词条: ${lingoHit.term}`);
     }
 
-    const messages = this.buildMessages(groupId, userName, question, wikiContext);
+    // 2. PRTS.Wiki（方舟数据）
+    if (isArk) {
+      try {
+        const r = await this.wiki.retrieve(question);
+        if (r.context) {
+          knowledgeParts.push(`【PRTS.Wiki】\n${r.context}`);
+          log(`[chat] 群 ${groupId} 检索到 PRTS.Wiki: ${r.sources.join(', ')}`);
+        }
+      } catch (e) {
+        log(`[chat] PRTS.Wiki 检索失败: ${e.message}`);
+      }
+
+      // 3. 萌娘百科（梗/黑话/社区文化）
+      try {
+        const m = await this.moegirl.retrieve(question);
+        if (m.context) {
+          knowledgeParts.push(`【萌娘百科】\n${m.context}`);
+          log(`[chat] 群 ${groupId} 检索到萌娘百科: ${m.sources.join(', ')}`);
+        }
+      } catch (e) {
+        log(`[chat] 萌娘百科检索失败: ${e.message}`);
+      }
+    } else {
+      log(`[chat] 群 ${groupId} 问题与方舟无关，跳过知识库检索`);
+    }
+
+    const knowledgeContext = knowledgeParts.join('\n\n---\n\n');
+    const messages = this.buildMessages(groupId, userName, question, knowledgeContext);
     this.pushMessage(groupId, 'user', `${userName}：${question}`);
 
     try {

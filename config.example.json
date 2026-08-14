@@ -22,7 +22,11 @@
     "wikiApiUrl": "https://prts.wiki/api.php",
     "wikiMaxResults": 5,
     "wikiMaxCharPerPage": 4000,
-    "wikiTopK": 3
+    "wikiTopK": 3,
+    "moegirlEnabled": true,
+    "moegirlMaxCharPerPage": 5000,
+    "moegirlTopK": 2,
+    "lingoFile": "./data/lingo.json"
   },
   "minMessages": 5,
   "includeSelf": false,
