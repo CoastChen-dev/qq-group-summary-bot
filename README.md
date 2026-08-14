@@ -1,12 +1,12 @@
-# QQ 群聊每小时概括机器人 (NapCat)
+# QQ 群聊概括机器人 (NapCat)
 
 基于 [NapCat](https://github.com/NapNeko/NapCatQQ) 的 OneBot 11 协议，通过正向 WebSocket 连接，
-实时接收群消息、本地持久化，并**每隔一小时**抓取时段内聊天记录，调用 LLM API 生成概括后发回群里。
+实时接收群消息、本地持久化，并通过 LLM 生成群聊概括与每日日报。
 
 ## 功能
 
 - 实时接收群消息并持久化到 `data/messages/<群号>/<日期>.jsonl`
-- 群里发「@机器人 总结 / /总结 / #总结」可手动触发概括（**必须 @ 机器人**，防止误触发）
+- 群里发「@机器人 总结 / @机器人 /总结 / @机器人 #总结」可手动触发概括（**必须 @ 机器人**，防止误触发）
 - **每日 9:00** 自动统计昨日各群消息，将「昨日活跃群（≥100 条）日报」**私聊发送**给指定 QQ
 - **静默时段**（默认 0:00-8:00）：不响应任何总结请求
 - **离线补偿**：每次启动时自动从**上次下线时刻**（持久化的最后在线时间）拉取错过的历史消息，重启/掉线也能补齐
@@ -24,11 +24,13 @@ src/
   store.js      消息存储 / 持久化 / 时段提取
   summarizer.js LLM（OpenAI 兼容接口）概括器
   scheduler.js  定时调度器
+  filter.js     敏感内容过滤
   logger.js     日志
-config.json     配置文件
-start_bot.bat   Windows 快捷启动脚本
-bot.log         stdout 日志
-data/           运行数据（消息记录 + 概括进度）
+config.example.json  配置模板（脱敏，可提交仓库）
+config.json          实际配置（含密钥，已被 .gitignore 排除）
+start_bot.bat        Windows 快捷启动脚本
+bot.log              stdout 日志
+data/                运行数据（消息记录 + 概括进度 + 最后在线时间）
 ```
 
 ## 快速开始
@@ -46,14 +48,20 @@ data/           运行数据（消息记录 + 概括进度）
 > 提示：若电脑上残留过其他 QQ 账号的登录态，NapCat 可能错误复用旧账号导致连接配置不生效。
 > 到 `C:\Users\<你>\AppData\Roaming\QQ\Partitions` 删除旧账号的 `qqnt_<旧号>` 目录，
 > 并清理 NapCat 配置目录里旧账号的 `onebot11_<旧号>.json`，再重启机器人账号。
+>
+> 若扫码登录提示 `serverErrorCode: 168`（"账号近期存在安全风险"），是 QQ 风控所致：
+> 需用手机 QQ 登录该账号完成安全验证后再扫码。机器人建议使用小号，主号频繁异常登录易触发风控。
 
 ### 2. 修改配置 `config.json`
+
+```bash
+cp config.example.json config.json   # 复制模板
+```
 
 - `napcat.wsUrl`：NapCat 正向 WebSocket 地址（默认 `ws://127.0.0.1:3001`）
 - `napcat.selfId`：机器人 QQ 号
 - `napcat.accessToken`：NCD 里 WS 服务器生成的 token（连 WS 需携带）
 - `groups`：要监控的群号列表，例如 `[123456, 789012]`；留空 `[]` 表示监控所有群
-- `llm.baseUrl` / `llm.model`：OpenAI 兼容接口（默认 DeepSeek，可换 OpenAI / 通义 / 其他）
 - `llm.apiKey`：**必填**，也可用环境变量 `LLM_API_KEY` 设置（优先级更高）
 - `llm.baseUrl` / `llm.model`：OpenAI 兼容接口（默认 DeepSeek，可换 OpenAI / 通义 / 其他）
 - `schedule`：日报任务时间（`hour`/`minute`，默认 9:00）
@@ -71,9 +79,6 @@ data/           运行数据（消息记录 + 概括进度）
 
 ```bash
 npm install
-# 复制配置模板并填写真实值
-cp config.example.json config.json
-# 编辑 config.json：填 llm.apiKey / napcat.accessToken / report.userId 等
 npm start
 ```
 
@@ -88,6 +93,21 @@ Windows 下也可直接双击 `start_bot.bat`（后台运行，日志写 `bot.lo
 
 - **手动总结**：在群里发「@机器人 总结」（静默时段 0:00-8:00 内不响应）
 - **每日日报**：每天 9:00 自动把昨日活跃群（≥100 条消息）的概括私聊发给 `report.userId`
+
+## Windows 开机自启（可选）
+
+用计划任务实现登录后自动启动：
+
+```powershell
+# 管理员 PowerShell 中执行
+$action = New-ScheduledTaskAction -Execute "C:\path\to\start_bot.bat" -WorkingDirectory "C:\path\to\project"
+$trigger = New-ScheduledTaskTrigger -AtLogOn
+$principal = New-ScheduledTaskPrincipal -UserId "$env:USERNAME" -LogonType Interactive -RunLevel Limited
+$settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -ExecutionTimeLimit (New-TimeSpan -Hours 0) -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1)
+Register-ScheduledTask -TaskName "QQSummaryBot" -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Force
+```
+
+> 注：计划任务在**用户登录后**触发（若设了开机密码需登录后）。NapCat（NCD）需另行开启或设为自启。
 
 ## 发送效果示例
 
@@ -132,6 +152,7 @@ Windows 下也可直接双击 `start_bot.bat`（后台运行，日志写 `bot.lo
 - 重启：双击 `start_bot.bat`
 - 查看日志：`bot.log`（程序自身写入，不依赖重定向）
 - NapCat 与 QQ 登录：用 NCD 管理，别直接用本机器人脚本去动 NapCat 配置
+- 数据文件：`data/messages/<群号>/<日期>.jsonl`（消息）、`data/state/lastSeen.json`（最后在线时间）
 
 ## 常见问题
 
@@ -139,10 +160,11 @@ Windows 下也可直接双击 `start_bot.bat`（后台运行，日志写 `bot.lo
 - **机器人收不到群消息**：确认机器人已加入对应群；检查 `groups` 是否留空（空=全部）或包含目标群。
 - **LLM 调用报错**：确认 `apiKey` 与 `baseUrl` 正确、模型名有效。
 - **重启后重复概括**：`lastSummaryAt` 已持久化到 `data/state/`，正常不会重复；若手动删除了 state 文件，会从当前时段重新概括。
-- **日报没发送**：确认 `report.userId` 已配置、昨日消息数达到 `report.minMessages`（默认 100）。数据按日期存于 `data/messages/<群号>/<日期>.jsonl`，机器人会自动从磁盘读取昨日数据。
+- **日报没发送**：确认 `report.userId` 已配置、昨日消息数达到 `report.minMessages`（默认 100）。数据按日期存于 `data/messages/<群号>/<日期>.jsonl`，机器人会自动从磁盘读取昨日数据。注意日报**只统计昨日**（当天消息不计入）。
 - **NapCat 提示 `未找到对应版本的偏移数据`**：NapCat 对最新版 QQ 的适配可能滞后（本机为 QQ 9.9.33 时 NapCat 4.18.18 提示过）。消息收发已验证正常，个别高级 API 可能受限；可关注 NapCat 更新。
 
 ## 说明
 
 - 摘要内容由 LLM 生成，仅供群内成员参考，不作为事实依据。
 - 聊天记录保存在本地 `data/` 目录，请妥善保管，注意隐私。
+- 敏感内容过滤依赖内置关键词/正则规则（见 `src/filter.js`），请按需调整。
