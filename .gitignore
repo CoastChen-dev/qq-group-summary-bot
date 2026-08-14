@@ -1,0 +1,8 @@
+node_modules/
+data/
+.env
+*.log
+config.json
+start_bot.bat
+bot.log
+bot.err.log

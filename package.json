@@ -1,0 +1,17 @@
+{
+  "name": "qq-group-summary-bot",
+  "version": "1.0.0",
+  "private": true,
+  "description": "NapCat 定时抓取 QQ 群聊记录并通过 LLM 生成概括的机器人",
+  "type": "module",
+  "main": "src/index.js",
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "start": "node src/index.js"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  }
+}

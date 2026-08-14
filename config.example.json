@@ -1,0 +1,41 @@
+{
+  "napcat": {
+    "wsUrl": "ws://127.0.0.1:3001",
+    "selfId": 0,
+    "accessToken": ""
+  },
+  "groups": [],
+  "schedule": {
+    "hour": 9,
+    "minute": 0
+  },
+  "llm": {
+    "apiKey": "",
+    "baseUrl": "https://api.deepseek.com/v1",
+    "model": "deepseek-chat",
+    "maxMessages": 3000,
+    "maxTokens": 2048
+  },
+  "minMessages": 5,
+  "includeSelf": false,
+  "dataDir": "./data",
+  "report": {
+    "userId": 0,
+    "minMessages": 100,
+    "hour": 9
+  },
+  "quiet": {
+    "enabled": true,
+    "start": 0,
+    "end": 8
+  },
+  "backfill": {
+    "maxHours": 72
+  },
+  "filter": {
+    "enabled": true
+  },
+  "commands": {
+    "manualSummary": ["总结", "/总结", "#总结"]
+  }
+}
