@@ -14,7 +14,10 @@
     "baseUrl": "https://api.deepseek.com/v1",
     "model": "deepseek-chat",
     "maxMessages": 3000,
-    "maxTokens": 2048
+    "maxTokens": 2048,
+    "chatEnabled": true,
+    "chatHistoryLimit": 12,
+    "defaultReply": "抱歉，我现在不方便回复，稍后再试试吧~"
   },
   "minMessages": 5,
   "includeSelf": false,

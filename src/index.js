@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { NapCatClient } from './napcat.js';
 import { MessageStore, fmtFull } from './store.js';
 import { Summarizer } from './summarizer.js';
+import { ChatBot } from './chat.js';
 import { Scheduler } from './scheduler.js';
 import { filterMessages as filterMessagesRaw } from './filter.js';
 import { log, err } from './logger.js';
@@ -31,6 +32,7 @@ const client = new NapCatClient(config.napcat.wsUrl, {
   accessToken: config.napcat.accessToken || '',
 });
 const summarizer = new Summarizer(llm);
+const chatBot = new ChatBot(llm);
 const scheduler = new Scheduler(config.schedule || {});
 
 const trackedGroups = () => (Array.isArray(config.groups) ? config.groups : []);
@@ -64,6 +66,14 @@ function inQuietHours(date = new Date()) {
   const h = date.getHours();
   if (quietStart < quietEnd) return h >= quietStart && h < quietEnd;
   return h >= quietStart || h < quietEnd;
+}
+
+function extractQuestion(rec, mentionedSelf) {
+  if (!mentionedSelf) return rec.text.trim();
+  let text = rec.text.trim();
+  text = text.replace(/^@机器人\s*/, '');
+  text = text.replace(/^@[^\s@]{1,30}\s*/, '');
+  return text.trim();
 }
 
 async function triggerSummary(groupId, opts = {}) {
@@ -239,14 +249,31 @@ client.onEvent((event) => {
   const mentionedSelf = Array.isArray(event.message) &&
     event.message.some((seg) => seg?.type === 'at' && String(seg.data?.qq) === String(selfId));
   const cmd = rec.text.trim();
-  if (mentionedSelf && manualCmds.some((c) => cmd.includes(c))) {
-    if (inQuietHours()) {
-      log(`[group ${event.group_id}] 收到总结指令但处于静默时段(${quietStart}:00-${quietEnd}:00)，忽略`);
-      return;
-    }
+  const mentionedByText = cmd.includes(`@${selfId}`) || cmd.includes('@机器人') || cmd.includes('@PRTS');
+  const isMentioned = mentionedSelf || mentionedByText;
+
+  if (!isMentioned) return;
+
+  if (inQuietHours()) {
+    log(`[group ${event.group_id}] 收到 @机器人 消息但处于静默时段(${quietStart}:00-${quietEnd}:00)，忽略`);
+    return;
+  }
+
+  if (manualCmds.some((c) => cmd.includes(c))) {
     log(`[group ${event.group_id}] 收到手动总结指令 (@机器人)`);
     triggerSummary(event.group_id, { manual: true }).catch((e) => err('手动总结失败:', e.message));
+    return;
   }
+
+  const question = extractQuestion(rec, true);
+  if (!question) return;
+
+  const senderName = event.sender?.card || event.sender?.nickname || '群友';
+  chatBot.chat(event.group_id, senderName, question)
+    .then((reply) => {
+      if (reply) return client.sendGroupMsg(event.group_id, reply);
+    })
+    .catch((e) => err(`[chat] 群 ${event.group_id} 发送失败:`, e.message));
 });
 
 for (const sig of ['SIGINT', 'SIGTERM']) {

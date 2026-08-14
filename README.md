@@ -7,6 +7,7 @@
 
 - 实时接收群消息并持久化到 `data/messages/<群号>/<日期>.jsonl`
 - 群里发「@机器人 总结 / @机器人 /总结 / @机器人 #总结」可手动触发概括（**必须 @ 机器人**，防止误触发）
+- **AI 群聊**：群里 @机器人 说其他内容时，调用 DeepSeek 以群友身份回复（带上下文记忆，每群保留最近 N 条）
 - **每日 9:00** 自动统计昨日各群消息，将「昨日活跃群（≥100 条）日报」**私聊发送**给指定 QQ
 - **静默时段**（默认 0:00-8:00）：不响应任何总结请求
 - **离线补偿**：每次启动时自动从**上次下线时刻**（持久化的最后在线时间）拉取错过的历史消息，重启/掉线也能补齐
@@ -23,6 +24,7 @@ src/
   napcat.js     OneBot 11 正向 WebSocket 客户端
   store.js      消息存储 / 持久化 / 时段提取
   summarizer.js LLM（OpenAI 兼容接口）概括器
+  chat.js       AI 群聊（带上下文记忆）
   scheduler.js  定时调度器
   filter.js     敏感内容过滤
   logger.js     日志
@@ -64,6 +66,9 @@ cp config.example.json config.json   # 复制模板
 - `groups`：要监控的群号列表，例如 `[123456, 789012]`；留空 `[]` 表示监控所有群
 - `llm.apiKey`：**必填**，也可用环境变量 `LLM_API_KEY` 设置（优先级更高）
 - `llm.baseUrl` / `llm.model`：OpenAI 兼容接口（默认 DeepSeek，可换 OpenAI / 通义 / 其他）
+- `llm.chatEnabled`：AI 群聊开关（默认 `true`）
+- `llm.chatHistoryLimit`：每群保留的上下文条数（默认 12）
+- `llm.defaultReply`：AI 调用失败时的兜底回复
 - `schedule`：日报任务时间（`hour`/`minute`，默认 9:00）
 - `minMessages`：手动总结低于该消息条数时跳过
 - `report`：日报配置
@@ -92,6 +97,7 @@ Windows 下也可直接双击 `start_bot.bat`（后台运行，日志写 `bot.lo
 ## 使用方式
 
 - **手动总结**：在群里发「@机器人 总结」（静默时段 0:00-8:00 内不响应）
+- **AI 群聊**：在群里 @机器人 直接说话（如「@机器人 你好」），机器人以 AI 群友身份回复，能记住群内最近对话
 - **每日日报**：每天 9:00 自动把昨日活跃群（≥100 条消息）的概括私聊发给 `report.userId`
 
 ## Windows 开机自启（可选）
@@ -157,7 +163,7 @@ Register-ScheduledTask -TaskName "QQSummaryBot" -Action $action -Trigger $trigge
 ## 常见问题
 
 - **连不上 NapCat**：确认 NapCat 已登录并开启正向 WebSocket 服务，检查 `wsUrl` 端口与 `accessToken`。
-- **机器人收不到群消息**：确认机器人已加入对应群；检查 `groups` 是否留空（空=全部）或包含目标群。
+- **机器人收不到群消息 / @机器人 不响应**：确认机器人已加入对应群、已登录且状态正常。若「@昵称」方式不响应但「@QQ号」可以，是 NapCat 对 at 段解析差异所致——本机器人已兼容「文本含 @机器人/@昵称」的识别。检查 `groups` 是否留空（空=全部）或包含目标群。
 - **LLM 调用报错**：确认 `apiKey` 与 `baseUrl` 正确、模型名有效。
 - **重启后重复概括**：`lastSummaryAt` 已持久化到 `data/state/`，正常不会重复；若手动删除了 state 文件，会从当前时段重新概括。
 - **日报没发送**：确认 `report.userId` 已配置、昨日消息数达到 `report.minMessages`（默认 100）。数据按日期存于 `data/messages/<群号>/<日期>.jsonl`，机器人会自动从磁盘读取昨日数据。注意日报**只统计昨日**（当天消息不计入）。
