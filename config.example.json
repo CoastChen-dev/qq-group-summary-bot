@@ -17,7 +17,12 @@
     "maxTokens": 2048,
     "chatEnabled": true,
     "chatHistoryLimit": 12,
-    "defaultReply": "抱歉，我现在不方便回复，稍后再试试吧~"
+    "defaultReply": "抱歉，我现在不方便回复，稍后再试试吧~",
+    "wikiEnabled": true,
+    "wikiApiUrl": "https://prts.wiki/api.php",
+    "wikiMaxResults": 5,
+    "wikiMaxCharPerPage": 4000,
+    "wikiTopK": 3
   },
   "minMessages": 5,
   "includeSelf": false,

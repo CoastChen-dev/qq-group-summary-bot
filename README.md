@@ -8,6 +8,7 @@
 - 实时接收群消息并持久化到 `data/messages/<群号>/<日期>.jsonl`
 - 群里发「@机器人 总结 / @机器人 /总结 / @机器人 #总结」可手动触发概括（**必须 @ 机器人**，防止误触发）
 - **AI 群聊**：群里 @机器人 说其他内容时，调用 DeepSeek 以群友身份回复（带上下文记忆，每群保留最近 N 条）
+- **PRTS.Wiki 知识库**：AI 群聊回答时会自动检索 [PRTS.Wiki](https://prts.wiki)（明日方舟 Wiki），把相关词条作为参考注入，能回答明日方舟相关问题
 - **每日 9:00** 自动统计昨日各群消息，将「昨日活跃群（≥100 条）日报」**私聊发送**给指定 QQ
 - **静默时段**（默认 0:00-8:00）：不响应任何总结请求
 - **离线补偿**：每次启动时自动从**上次下线时刻**（持久化的最后在线时间）拉取错过的历史消息，重启/掉线也能补齐
@@ -24,7 +25,8 @@ src/
   napcat.js     OneBot 11 正向 WebSocket 客户端
   store.js      消息存储 / 持久化 / 时段提取
   summarizer.js LLM（OpenAI 兼容接口）概括器
-  chat.js       AI 群聊（带上下文记忆）
+  chat.js       AI 群聊（带上下文记忆 + PRTS.Wiki 检索）
+  wiki.js       PRTS.Wiki 检索器（MediaWiki API）
   scheduler.js  定时调度器
   filter.js     敏感内容过滤
   logger.js     日志
@@ -69,6 +71,8 @@ cp config.example.json config.json   # 复制模板
 - `llm.chatEnabled`：AI 群聊开关（默认 `true`）
 - `llm.chatHistoryLimit`：每群保留的上下文条数（默认 12）
 - `llm.defaultReply`：AI 调用失败时的兜底回复
+- `llm.wikiEnabled`：PRTS.Wiki 知识库开关（默认 `true`）
+- `llm.wikiApiUrl` / `wikiMaxResults` / `wikiMaxCharPerPage` / `wikiTopK`：知识库检索参数
 - `schedule`：日报任务时间（`hour`/`minute`，默认 9:00）
 - `minMessages`：手动总结低于该消息条数时跳过
 - `report`：日报配置
@@ -97,7 +101,7 @@ Windows 下也可直接双击 `start_bot.bat`（后台运行，日志写 `bot.lo
 ## 使用方式
 
 - **手动总结**：在群里发「@机器人 总结」（静默时段 0:00-8:00 内不响应）
-- **AI 群聊**：在群里 @机器人 直接说话（如「@机器人 你好」），机器人以 AI 群友身份回复，能记住群内最近对话
+- **AI 群聊**：在群里 @机器人 直接说话（如「@机器人 你好」「@机器人 阿米娅是谁」），机器人以 AI 群友身份回复，能记住群内最近对话；涉及明日方舟的问题会自动检索 PRTS.Wiki 作为参考
 - **每日日报**：每天 9:00 自动把昨日活跃群（≥100 条消息）的概括私聊发给 `report.userId`
 
 ## Windows 开机自启（可选）

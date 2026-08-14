@@ -1,4 +1,5 @@
 import { log } from './logger.js';
+import { WikiRetriever } from './wiki.js';
 
 export class ChatBot {
   constructor(cfg = {}) {
@@ -9,6 +10,7 @@ export class ChatBot {
     this.historyLimit = cfg.chatHistoryLimit ?? 12;
     this.enabled = cfg.chatEnabled !== false;
     this.defaultReply = cfg.defaultReply ?? '抱歉，我现在不方便回复，稍后再试试吧~';
+    this.wiki = new WikiRetriever(cfg);
 
     this.groupHistory = new Map();
   }
@@ -24,7 +26,7 @@ export class ChatBot {
     if (h.length > this.historyLimit) h.splice(0, h.length - this.historyLimit);
   }
 
-  buildMessages(groupId, userName, question) {
+  buildMessages(groupId, userName, question, wikiContext = '') {
     const sys = [
       '你是一个活跃在 QQ 群里的 AI 群友，昵称是 PRTS。',
       '你会和群友轻松自然地聊天，语气亲切、幽默，回答简洁（通常 1-3 句话，最多不超过 150 字）。',
@@ -38,14 +40,29 @@ export class ChatBot {
     const messages = [{ role: 'system', content: sys }];
     const history = this.getHistory(groupId);
     messages.push(...history.slice(-this.historyLimit));
-    messages.push({ role: 'user', content: `${userName}：${question}` });
+
+    let userContent = `${userName}：${question}`;
+    if (wikiContext) {
+      userContent += `\n\n以下是与问题相关的 Wiki 资料，可参考其中的事实（如有）：\n${wikiContext}`;
+    }
+    messages.push({ role: 'user', content: userContent });
     return messages;
   }
 
   async chat(groupId, userName, question) {
     if (!this.enabled) return null;
 
-    const messages = this.buildMessages(groupId, userName, question);
+    let wikiContext = '';
+    let sources = [];
+    try {
+      const r = await this.wiki.retrieve(question);
+      wikiContext = r.context;
+      sources = r.sources;
+    } catch (e) {
+      log(`[chat] wiki 检索失败: ${e.message}`);
+    }
+
+    const messages = this.buildMessages(groupId, userName, question, wikiContext);
     this.pushMessage(groupId, 'user', `${userName}：${question}`);
 
     try {
