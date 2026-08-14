@@ -3,6 +3,32 @@ import { log } from './logger.js';
 const API_URL = 'https://prts.wiki/api.php';
 const UA = 'PRTS-AI-Bot/1.0 (QQ Group Chat Bot; contact: local)';
 
+// 明日方舟相关关键词（用于判断是否检索 PRTS.Wiki）
+const ARK_KEYWORDS = [
+  '明日方舟', '方舟', '阿米娅', '博士', '罗德岛', '干员', 'PRTS', 'prts',
+  '龙门', '源石', '合成玉', '理智', '体力', '抽卡', '卡池', '寻访',
+  '关卡', '剿灭', '危机合约', '集成战略', '肉鸽', '保全派驻', '生息演算',
+  '基建', '线索', '精二', '专三', '专武', '潜能', '信赖', '技能',
+  '能天使', '银灰', '艾雅法拉', '小火龙', '塞雷娅', '星熊', '拉普兰德',
+  '德克萨斯', '推进之王', '斯卡蒂', '棘刺', '山', '水陈', '玛恩纳',
+  '史尔特尔', '42', '泥岩', '煌', '夜莺', '白面鸮', '赛诺斯',
+  '凯尔希', '陈', '诗怀雅', '凛冬', '守林人', '梅', '桃金娘',
+  '先锋', '近卫', '重装', '狙击', '术士', '医疗', '辅助', '特种',
+  '部署', '费用', '攻速', '攻击力', '防御', '法抗', '模组', '专精',
+];
+
+const STAGE_PATTERN = /(^|[^A-Za-z0-9])([A-Za-z]?-?[0-9]+-[0-9]+|[A-Za-z]{2,3}-?[0-9]{1,3})([^A-Za-z0-9]|$)/i;
+
+export function isArknightsRelated(text) {
+  if (!text) return false;
+  const t = String(text).toLowerCase();
+  for (const kw of ARK_KEYWORDS) {
+    if (t.includes(kw.toLowerCase())) return true;
+  }
+  if (STAGE_PATTERN.test(text)) return true;
+  return false;
+}
+
 export class WikiRetriever {
   constructor(cfg = {}) {
     this.enabled = cfg.wikiEnabled !== false;

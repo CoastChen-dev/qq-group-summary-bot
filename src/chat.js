@@ -1,5 +1,5 @@
 import { log } from './logger.js';
-import { WikiRetriever } from './wiki.js';
+import { WikiRetriever, isArknightsRelated } from './wiki.js';
 
 export class ChatBot {
   constructor(cfg = {}) {
@@ -54,12 +54,17 @@ export class ChatBot {
 
     let wikiContext = '';
     let sources = [];
-    try {
-      const r = await this.wiki.retrieve(question);
-      wikiContext = r.context;
-      sources = r.sources;
-    } catch (e) {
-      log(`[chat] wiki 检索失败: ${e.message}`);
+    if (isArknightsRelated(question)) {
+      try {
+        const r = await this.wiki.retrieve(question);
+        wikiContext = r.context;
+        sources = r.sources;
+        if (sources.length > 0) log(`[chat] 群 ${groupId} 检索到方舟资料: ${sources.join(', ')}`);
+      } catch (e) {
+        log(`[chat] wiki 检索失败: ${e.message}`);
+      }
+    } else {
+      log(`[chat] 群 ${groupId} 问题与方舟无关，跳过 wiki 检索`);
     }
 
     const messages = this.buildMessages(groupId, userName, question, wikiContext);
