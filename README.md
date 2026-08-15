@@ -12,6 +12,7 @@
   - **本地梗词典** `data/lingo.json`：可手动维护 + 命中即用（最快）
   - **PRTS.Wiki**：明日方舟数据（干员/关卡/机制）
   - **萌娘百科**：社区梗/黑话/文化词条（如"轮椅轴"、"明日方舟/梗"）
+- **本地干员数据库**（`data/ark/`）：来自 [ArknightsGameData](https://github.com/Kengxxiao/ArknightsGameData)，含全量干员信息与官方档案（生日/种族/身高/简介等），干员生日、资料类问题**本地秒回**（约 1-2s，提速约 10 倍），不依赖联网
 - **知识缓存**：检索结果缓存到 `data/knowledge_cache.json`，同问题二次提问直接命中缓存（提速约 6 倍），缓存 TTL 可配置
 - **按可信度/热度排序**：多来源结果按来源可信度（词典>PRTS>萌娘）与热度（页面篇幅）综合评分排序，优先用最可能相关的资料
 - **每日 9:00** 自动统计昨日各群消息，将「昨日活跃群（≥100 条）日报」**私聊发送**给指定 QQ
@@ -30,9 +31,10 @@ src/
   napcat.js     OneBot 11 正向 WebSocket 客户端
   store.js      消息存储 / 持久化 / 时段提取
   summarizer.js LLM（OpenAI 兼容接口）概括器
-  chat.js       AI 群聊（带上下文记忆 + 三级知识库）
+  chat.js       AI 群聊（带上下文记忆 + 三级知识库 + 本地干员库）
   wiki.js       PRTS.Wiki 检索器（MediaWiki API）
   moegirl.js    萌娘百科检索器（社区梗/黑话）
+  arkdb.js      本地干员数据库（干员信息/生日/档案）
   lingo.js      本地梗词典（可维护 + 学习）
   cache.js      知识缓存（加速重复提问）
   scheduler.js  定时调度器
@@ -84,6 +86,23 @@ cp config.example.json config.json   # 复制模板
 - `llm.moegirlEnabled` / `moegirlMaxCharPerPage` / `moegirlTopK`：萌娘百科检索参数
 - `llm.lingoFile`：本地梗词典文件路径（默认 `data/lingo.json`，可手动编辑维护）
 - `llm.cacheFile` / `cacheTtlHours`：知识缓存文件与 TTL（默认 168 小时）
+- `llm.arkdbDir`：本地干员数据库目录（默认 `data/ark/`，放 `character_table.json` 与 `handbook_info_table.json`）
+
+### 本地干员数据库（可选，强烈推荐）
+
+从 [ArknightsGameData](https://github.com/Kengxxiao/ArknightsGameData) 下载两个文件到 `data/ark/`：
+
+```bash
+# 干员基础数据（约 14MB）
+curl -o data/ark/character_table.json \
+  https://raw.githubusercontent.com/Kengxxiao/ArknightsGameData/master/zh_CN/gamedata/excel/character_table.json
+
+# 干员档案（含生日/种族/简介，约 5.5MB）
+curl -o data/ark/handbook_info_table.json \
+  https://raw.githubusercontent.com/Kengxxiao/ArknightsGameData/master/zh_CN/gamedata/excel/handbook_info_table.json
+```
+
+部署后，干员生日、档案类问题（如"能天使生日"、"波登可是谁"）将**本地秒回**（约 1-2s），无需联网检索。
 
 > 仓库提供 `lingo.example.json` 词典模板（含常用干员绰号、方舟梗、知名 UP 主等 38 条），
 > 可复制到 `data/lingo.json` 使用。`data/` 目录已被 `.gitignore` 排除，你的本地词典不会误传。

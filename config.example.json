@@ -28,7 +28,8 @@
     "moegirlTopK": 2,
     "lingoFile": "./data/lingo.json",
     "cacheFile": "./data/knowledge_cache.json",
-    "cacheTtlHours": 168
+    "cacheTtlHours": 168,
+    "arkdbDir": "./data/ark"
   },
   "minMessages": 5,
   "includeSelf": false,

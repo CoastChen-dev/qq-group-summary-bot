@@ -1,8 +1,9 @@
 import { log } from './logger.js';
-import { WikiRetriever, isArknightsRelated } from './wiki.js';
+import { WikiRetriever, isArknightsRelated, extractKeywords } from './wiki.js';
 import { MoegirlRetriever } from './moegirl.js';
 import { LingoStore } from './lingo.js';
 import { KnowledgeCache } from './cache.js';
+import { ArkDB } from './arkdb.js';
 
 // 来源可信度权重（分数越高越可信）
 const SOURCE_TRUST = {
@@ -31,6 +32,7 @@ export class ChatBot {
     this.moegirl = new MoegirlRetriever(cfg);
     this.lingo = new LingoStore(cfg.lingoFile);
     this.cache = new KnowledgeCache(cfg.cacheFile, { ttlHours: cfg.cacheTtlHours ?? 168 });
+    this.arkdb = new ArkDB(cfg.arkdbDir);
 
     this.groupHistory = new Map();
     // 群 → { 昵称: 编号 }，用于内部匿名区分发言者（群友1/群友2...）
@@ -111,9 +113,33 @@ export class ChatBot {
     const lingoHit = this.lingo.lookup(question);
     const isArk = isArknightsRelated(question) || !!lingoHit || this._looksLikeLingoQuestion(question);
 
-    // 生日类问题：萌娘百科干员基本资料含"生日"字段，引导检索
+    // 本地干员数据库：生日/干员档案类问题优先本地查询（快速、准确）
+    let arkdbContext = '';
+    let arkdbHit = null;
+    if (this.arkdb) {
+      this.arkdb.load();
+      const localHit = this.arkdb.findByName(extractKeywords(question)) || this.arkdb.searchBirthday(String(question));
+      if (localHit && (localHit.birthday || localHit.desc || localHit.gender)) {
+        arkdbHit = localHit;
+        arkdbContext = `【本地干员数据库】${localHit.name || ''}\n生日：${localHit.birthday || '未收录'}\n性别：${localHit.gender || ''}\n种族：${localHit.race || ''}\n身高：${localHit.height || ''}\n职业：${localHit.profession || ''}\n简介：${(localHit.desc || '').slice(0, 200)}`;
+        log(`[chat] 群 ${groupId} 命中本地干员数据库: ${localHit.name || ''}`);
+      }
+    }
+
+    // 生日/干员资料类问题：本地库已有明确答案时直接返回（秒回，不联网）
+    const askBirthday = /生日/.test(String(question));
+    if (arkdbHit && askBirthday && arkdbHit.birthday) {
+      log(`[chat] 群 ${groupId} 生日问题命中本地数据库，跳过联网`);
+      return this._reply(groupId, userName, question, `【本地干员数据库】${arkdbHit.name}的生日是${arkdbHit.birthday}。`);
+    }
+    if (arkdbHit && /(是谁|什么干员|介绍|档案|资料|是谁|是什么)/.test(String(question)) && (arkdbHit.desc || arkdbHit.gender)) {
+      log(`[chat] 群 ${groupId} 干员资料问题命中本地数据库，跳过联网`);
+      return this._reply(groupId, userName, question, arkdbContext);
+    }
+
+    // 生日类问题引导（本地库无结果时）
     const birthdayContext = /生日/.test(String(question))
-      ? '【检索提示】明日方舟干员有官方生日设定（如波登可生日为3月25日）。请优先从下方萌娘百科/PRTS资料中提取该干员的"生日"字段来回答；若资料中确实没有该干员的生日信息，再如实说明未查到，切勿编造。'
+      ? '【检索提示】明日方舟干员有官方生日设定（如波登可生日为3月25日）。请优先从下方资料中提取该干员的"生日"字段来回答；若资料中确实没有该干员的生日信息，再如实说明未查到，切勿编造。'
       : '';
 
     // 1. 本地词典（梗/黑话，最快、可信度最高）
@@ -126,7 +152,7 @@ export class ChatBot {
     const cached = this.cache.get(`q:${question}`);
     if (cached && cached.context) {
       this.cache.hit(`q:${question}`);
-      const knowledgeContext = [birthdayContext, cached.context].filter(Boolean).join('\n\n---\n\n');
+      const knowledgeContext = [arkdbContext, birthdayContext, cached.context].filter(Boolean).join('\n\n---\n\n');
       log(`[chat] 群 ${groupId} 命中本地知识缓存（命中${cached.hits + 1}次）`);
       return this._reply(groupId, userName, question, knowledgeContext);
     }
@@ -176,7 +202,7 @@ export class ChatBot {
       : scored.sort((a, b) => b.score - a.score);
     log(`[chat] 群 ${groupId} 知识来源排序: ${sorted.map((s) => `${s.trustLabel}(${Math.round(s.score)})`).join(' > ')}`);
 
-    const knowledgeContext = [birthdayContext, ...sorted.map((s) => s.context)].filter(Boolean).join('\n\n---\n\n');
+    const knowledgeContext = [arkdbContext, birthdayContext, ...sorted.map((s) => s.context)].filter(Boolean).join('\n\n---\n\n');
     if (knowledgeContext) {
       this.cache.set(`q:${question}`, { context: knowledgeContext, sources: sorted.map((s) => s.sources).flat(), hits: 0 });
     }
