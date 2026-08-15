@@ -119,14 +119,14 @@ export class MoegirlRetriever {
     const core = extractKeywords(keyword) || String(keyword).trim();
     const variants = this._keywordVariants(core);
 
-    // 1. 尝试直接搜关键词对应词条
+    // 1. 尝试直接搜关键词对应词条（用核心词，如"波登可生日"→"波登可"）
     try {
-      const hits = await this.searchOpensearch(keyword);
+      const hits = await this.searchOpensearch(core);
       for (const hit of hits) {
         if (seen.has(hit.title)) continue;
         seen.add(hit.title);
         if (pages.length >= this.topK) break;
-        if (!this._isRelevantHit(hit.title, keyword)) continue;
+        if (!this._isRelevantHit(hit.title, core)) continue;
         try {
           const html = await this.getPageHtml(hit.title);
           const body = this.extractBody(html);

@@ -111,9 +111,9 @@ export class ChatBot {
     const lingoHit = this.lingo.lookup(question);
     const isArk = isArknightsRelated(question) || !!lingoHit || this._looksLikeLingoQuestion(question);
 
-    // 生日类问题：方舟官方无干员生日设定，强制注入正确知识，避免 LLM 编造
+    // 生日类问题：萌娘百科干员基本资料含"生日"字段，引导检索
     const birthdayContext = /生日/.test(String(question))
-      ? '【重要事实】明日方舟官方并未为干员设定生日（干员档案中没有生日字段，也没有官方生日设定）。回答此类问题时必须如实说明"官方没有干员生日设定"，不得编造具体日期。'
+      ? '【检索提示】明日方舟干员有官方生日设定（如波登可生日为3月25日）。请优先从下方萌娘百科/PRTS资料中提取该干员的"生日"字段来回答；若资料中确实没有该干员的生日信息，再如实说明未查到，切勿编造。'
       : '';
 
     // 1. 本地词典（梗/黑话，最快、可信度最高）
