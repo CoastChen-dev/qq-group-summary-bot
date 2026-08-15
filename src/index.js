@@ -266,7 +266,12 @@ client.onEvent((event) => {
   }
 
   const question = extractQuestion(rec, true);
-  if (!question) return;
+  if (!question) {
+    log(`[group ${event.group_id}] 收到仅@机器人（无内容）的消息`);
+    const senderName = event.sender?.card || event.sender?.nickname || '群友';
+    client.sendGroupMsg(event.group_id, `@${senderName} 艾特PRTS干什么呀喵`).catch((e) => err(`[group ${event.group_id}] 发送提示失败:`, e.message));
+    return;
+  }
 
   const senderName = event.sender?.card || event.sender?.nickname || '群友';
   chatBot.chat(event.group_id, senderName, question)
