@@ -6,13 +6,26 @@ const SITE_URL = 'https://zh.moegirl.org.cn';
 const UA = 'PRTS-AI-Bot/1.0 (QQ Group Chat Bot; contact: local)';
 const BROWSER_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36';
 
-// 与明日方舟社区梗/黑话相关的萌娘百科主词条（梗可能收录在这些页面中）
+// 与明日方舟社区梗/黑话相关的萌娘百科主词条（梗/物品/世界观可能收录在这些页面中）
 const ARK_LINGO_PAGES = [
   '明日方舟/梗',
   '明日方舟',
   '魔法Zc目录',
   '龙哥哥今天又鸽了',
   '明日方舟UP主',
+  // 世界观/地区/阵营（含大量物品、货币、梗的记录）
+  '高卢(明日方舟)',
+  '龙门(明日方舟)',
+  '维多利亚(明日方舟)',
+  '乌萨斯(明日方舟)',
+  '哥伦比亚(明日方舟)',
+  '莱塔尼亚(明日方舟)',
+  '谢拉格(明日方舟)',
+  '炎国(明日方舟)',
+  '卡西米尔(明日方舟)',
+  '罗德岛(明日方舟)',
+  '整合运动(明日方舟)',
+  '明日方舟/世界观',
 ];
 
 export class MoegirlRetriever {
