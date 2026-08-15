@@ -40,6 +40,17 @@ export class ChatBot {
     return this.groupHistory.get(groupId);
   }
 
+  // 识别"XX是什么意思/是什么梗"这类提问，即使不命中关键词表也尝试检索
+  _looksLikeLingoQuestion(question) {
+    if (!question) return false;
+    const t = String(question);
+    if (/意思|什么梗|啥意思|咋回事|由来|来历|出处|梗|黑话|简称/.test(t)) return true;
+    // 纯数字/短词提问，如 "325是什么" "JT8-3" 
+    if (/^(什么|是啥|是)[^\s]{1,10}$/.test(t)) return true;
+    if (/^[0-9A-Za-z\-]{1,10}(是什么|是啥|什么意思|是啥意思)/.test(t)) return true;
+    return false;
+  }
+
   pushMessage(groupId, role, content) {
     const h = this.getHistory(groupId);
     h.push({ role, content });
@@ -74,9 +85,8 @@ export class ChatBot {
   async chat(groupId, userName, question) {
     if (!this.enabled) return null;
 
-    const knowledgeParts = [];
     const lingoHit = this.lingo.lookup(question);
-    const isArk = isArknightsRelated(question) || !!lingoHit;
+    const isArk = isArknightsRelated(question) || !!lingoHit || this._looksLikeLingoQuestion(question);
 
     // 1. 本地词典（梗/黑话，最快、可信度最高）
     if (lingoHit) {
@@ -120,7 +130,7 @@ export class ChatBot {
       log(`[chat] 群 ${groupId} 问题与方舟无关，跳过知识库检索`);
     }
 
-    // 本地词典作为最高可信度条目
+    // 本地词典作为最高可信度条目（不参与排序，始终第一）
     if (lingoHit) {
       scored.unshift({
         source: 'lingo',
@@ -131,13 +141,16 @@ export class ChatBot {
       });
     }
 
-    // 按评分从高到低排序
-    scored.sort((a, b) => b.score - a.score);
-    log(`[chat] 群 ${groupId} 知识来源排序: ${scored.map((s) => `${s.trustLabel}(${Math.round(s.score)})`).join(' > ')}`);
+    // 其余来源按评分从高到低排序
+    const [first, ...rest] = scored;
+    const sorted = first && first.source === 'lingo'
+      ? [first, ...rest.sort((a, b) => b.score - a.score)]
+      : scored.sort((a, b) => b.score - a.score);
+    log(`[chat] 群 ${groupId} 知识来源排序: ${sorted.map((s) => `${s.trustLabel}(${Math.round(s.score)})`).join(' > ')}`);
 
-    const knowledgeContext = scored.map((s) => s.context).join('\n\n---\n\n');
+    const knowledgeContext = sorted.map((s) => s.context).join('\n\n---\n\n');
     if (knowledgeContext) {
-      this.cache.set(`q:${question}`, { context: knowledgeContext, sources: scored.map((s) => s.sources).flat(), hits: 0 });
+      this.cache.set(`q:${question}`, { context: knowledgeContext, sources: sorted.map((s) => s.sources).flat(), hits: 0 });
     }
 
     return this._reply(groupId, userName, question, knowledgeContext);

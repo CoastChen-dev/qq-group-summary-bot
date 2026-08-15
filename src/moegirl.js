@@ -34,6 +34,21 @@ export class MoegirlRetriever {
     return (data?.[1] || []).map((title, i) => ({ title, url: data?.[3]?.[i] }));
   }
 
+  // 生成关键词的匹配变体：325 → ["325", "3-25", "三二五", "3 2 5"]
+  _keywordVariants(keyword) {
+    const variants = new Set([String(keyword).trim()]);
+    const t = String(keyword).trim();
+    const numMatch = t.match(/^(\d+)$/);
+    if (numMatch) {
+      const digits = numMatch[1];
+      variants.add(digits.split('').join('-'));
+      variants.add(digits.split('').join(' '));
+      const cn = digits.split('').map((d) => '零一二三四五六七八九'[Number(d)]).join('');
+      variants.add(cn);
+    }
+    return [...variants];
+  }
+
   async getPageHtml(title) {
     await this._wait();
     const url = `${SITE_URL}/${encodeURIComponent(title)}`;
@@ -44,8 +59,29 @@ export class MoegirlRetriever {
 
   extractBody(html) {
     let body = html;
-    const m = body.match(/<div class="mw-parser-output">([\s\S]*?)<\/div>\s*<\/div>/);
-    if (m) body = m[1];
+    // 优先匹配正文容器（MediaWiki 常见结构）
+    const patterns = [
+      /<div class="mw-parser-output">([\s\S]*?)<\/div>\s*<\/div>/,
+      /<div id="mw-content-text"[^>]*>([\s\S]*?)<div class="printfooter"|/,
+      /<div class="mw-body-content"[^>]*>([\s\S]*?)<\/div>\s*<\/div>\s*<\/div>/,
+      /<div id="bodyContent"[^>]*>([\s\S]*?)<div class="printfooter"|/,
+    ];
+    for (const p of patterns) {
+      const m = body.match(p);
+      if (m && m[1] && m[1].length > 500) {
+        body = m[1];
+        break;
+      }
+    }
+    // 若上面都没匹配到，尝试截取 mw-content-text 之后、页面底部之前的内容
+    if (body.length === html.length) {
+      const start = body.indexOf('id="mw-content-text"');
+      if (start > 0) {
+        const cut = body.indexOf('id="catlinks"', start);
+        const end = cut > start ? cut : Math.min(start + 200000, body.length);
+        body = body.slice(start, end);
+      }
+    }
     body = body
       .replace(/<script[\s\S]*?<\/script>/g, '')
       .replace(/<style[\s\S]*?<\/style>/g, '')
@@ -56,11 +92,21 @@ export class MoegirlRetriever {
     return body;
   }
 
+  _isRelevantHit(title, keyword) {
+    const t = String(title).toLowerCase();
+    const kw = String(keyword).toLowerCase();
+    if (t.includes(kw)) return true;
+    // 关键词是短数字/代号时，允许命中方舟相关词条（含明日方舟标记）
+    if (/^[0-9a-z\-]+$/.test(kw) && /明日方舟|方舟|罗德岛|prts|干员/.test(t)) return true;
+    return false;
+  }
+
   async retrieve(keyword) {
     if (!this.enabled || !keyword) return { context: '', sources: [] };
 
     const pages = [];
     const seen = new Set();
+    const variants = this._keywordVariants(keyword);
 
     // 1. 尝试直接搜关键词对应词条
     try {
@@ -69,6 +115,7 @@ export class MoegirlRetriever {
         if (seen.has(hit.title)) continue;
         seen.add(hit.title);
         if (pages.length >= this.topK) break;
+        if (!this._isRelevantHit(hit.title, keyword)) continue;
         try {
           const html = await this.getPageHtml(hit.title);
           const body = this.extractBody(html);
@@ -90,15 +137,18 @@ export class MoegirlRetriever {
           const html = await this.getPageHtml(page);
           const body = this.extractBody(html);
           if (body) {
-            // 尝试定位关键词附近的段落
-            const kwIdx = body.indexOf(keyword);
-            let content = body;
-            if (kwIdx > 0) {
-              const start = Math.max(0, kwIdx - 200);
-              content = body.slice(start, start + this.maxCharPerPage);
-            } else {
-              content = body.slice(0, this.maxCharPerPage);
+            // 尝试用关键词多种变体定位相关段落
+            let content = null;
+            for (const v of variants) {
+              const kwIdx = body.indexOf(v);
+              if (kwIdx > 0) {
+                const start = Math.max(0, kwIdx - 200);
+                content = body.slice(start, start + this.maxCharPerPage);
+                log(`[moegirl] 在 "${page}" 中定位到 "${v}"`);
+                break;
+              }
             }
+            if (!content) content = body.slice(0, this.maxCharPerPage);
             pages.push({ title: page, content });
           }
         } catch {
