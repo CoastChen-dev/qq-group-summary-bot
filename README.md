@@ -84,6 +84,10 @@ cp config.example.json config.json   # 复制模板
 - `llm.moegirlEnabled` / `moegirlMaxCharPerPage` / `moegirlTopK`：萌娘百科检索参数
 - `llm.lingoFile`：本地梗词典文件路径（默认 `data/lingo.json`，可手动编辑维护）
 - `llm.cacheFile` / `cacheTtlHours`：知识缓存文件与 TTL（默认 168 小时）
+
+> 仓库提供 `lingo.example.json` 词典模板（含常用干员绰号、方舟梗、知名 UP 主等 38 条），
+> 可复制到 `data/lingo.json` 使用。`data/` 目录已被 `.gitignore` 排除，你的本地词典不会误传。
+> 新增梗时向词典加一条 `"梗名": "解释"` 即可（重启 bot 生效）。
 - `schedule`：日报任务时间（`hour`/`minute`，默认 9:00）
 - `minMessages`：手动总结低于该消息条数时跳过
 - `report`：日报配置
