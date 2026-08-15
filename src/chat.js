@@ -145,9 +145,10 @@ export class ChatBot {
     if (!this.enabled) return null;
 
     const lingoHit = this.lingo.lookup(question);
-    // 命中本地数据库干员名/别名也视为方舟相关，提高物品/角色问题触发检索的概率
+    // 命中本地数据库干员名/藏品名也视为方舟相关，提高物品/角色问题触发检索的概率
     const arkNameHit = this.arkdb ? this.arkdb.containsOperatorName(question) : false;
-    const isArk = isArknightsRelated(question) || !!lingoHit || arkNameHit || this._looksLikeLingoQuestion(question);
+    const relicHit = this.arkdb ? this.arkdb.containsRelicName(question) : false;
+    const isArk = isArknightsRelated(question) || !!lingoHit || arkNameHit || relicHit || this._looksLikeLingoQuestion(question);
 
     // 本地干员数据库：生日/干员档案类问题优先本地查询（快速、准确）
     let arkdbContext = '';
@@ -171,6 +172,14 @@ export class ChatBot {
     if (arkdbHit && /(是谁|什么干员|介绍|档案|资料|是谁|是什么)/.test(String(question)) && (arkdbHit.desc || arkdbHit.gender)) {
       log(`[chat] 群 ${groupId} 干员资料问题命中本地数据库，跳过联网`);
       return this._reply(groupId, userName, question, arkdbContext, userId);
+    }
+
+    // 肉鸽藏品查询：本地命中即秒回（含效果）
+    const relicObj = this.arkdb ? this.arkdb.findRelic(extractKeywords(question)) : null;
+    if (relicObj && relicObj.name && relicObj.usage) {
+      log(`[chat] 群 ${groupId} 藏品查询命中本地数据库: ${relicObj.name}`);
+      const relicCtx = `【本地肉鸽藏品库】${relicObj.name}\n效果：${relicObj.usage}\n描述：${relicObj.description || ''}`;
+      return this._reply(groupId, userName, question, relicCtx, userId);
     }
 
     // 生日类问题引导（本地库无结果时）

@@ -12,6 +12,7 @@ export class ArkDB {
     this.characters = new Map(); // charId -> 基础信息
     this.handbooks = new Map();  // charId -> 档案
     this.aliasMap = new Map();   // 别名/名称 -> charId
+    this.relics = new Map();     // 藏品名 -> 藏品信息
     this._loaded = false;
   }
 
@@ -61,7 +62,60 @@ export class ArkDB {
         log(`[arkdb] 档案表加载失败: ${e.message}`);
       }
     }
+
+    // 肉鸽藏品表（集成战略藏品，含高卢银行支票等）
+    const relicFile = path.join(this.dataDir, 'roguelike_topic_table.json');
+    if (fs.existsSync(relicFile)) {
+      try {
+        const rl = JSON.parse(fs.readFileSync(relicFile, 'utf8'));
+        const collectAll = (obj) => {
+          const out = [];
+          const walk = (o) => {
+            if (!o || typeof o !== 'object') return;
+            for (const v of Object.values(o)) {
+              if (v && typeof v === 'object') {
+                if (v.type === 'RELIC' && v.name) out.push(v);
+                else walk(v);
+              }
+            }
+          };
+          walk(obj);
+          return out;
+        };
+        const relics = collectAll(rl);
+        for (const r of relics) {
+          if (r.name) this.relics.set(r.name, r);
+        }
+        log(`[arkdb] 已加载 ${this.relics.size} 个肉鸽藏品`);
+      } catch (e) {
+        log(`[arkdb] 藏品表加载失败: ${e.message}`);
+      }
+    }
+
     this._loaded = true;
+  }
+
+  // 按藏品名查询
+  findRelic(name) {
+    if (!name) return null;
+    this.load();
+    const n = String(name).trim();
+    if (this.relics.has(n)) return this.relics.get(n);
+    for (const [key, r] of this.relics) {
+      if (key.length > 0 && key.includes(n)) return r;
+    }
+    return null;
+  }
+
+  // 判断文本是否提到某藏品（用于触发检索）
+  containsRelicName(text) {
+    if (!text) return false;
+    this.load();
+    const t = String(text);
+    for (const key of this.relics.keys()) {
+      if (key.length >= 2 && t.includes(key)) return true;
+    }
+    return false;
   }
 
   _extractProfile(handbook) {

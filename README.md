@@ -12,7 +12,7 @@
   - **本地梗词典** `data/lingo.json`：可手动维护 + 命中即用（最快）
   - **PRTS.Wiki**：明日方舟数据（干员/关卡/机制）
   - **萌娘百科**：社区梗/黑话/文化词条（如"轮椅轴"、"明日方舟/梗"）
-- **本地干员数据库**（`data/ark/`）：来自 [ArknightsGameData](https://github.com/Kengxxiao/ArknightsGameData)，含全量干员信息与官方档案（生日/种族/身高/简介等），干员生日、资料类问题**本地秒回**（约 1-2s，提速约 10 倍），不依赖联网
+- **本地干员数据库**（`data/ark/`）：来自 [ArknightsGameData](https://github.com/Kengxxiao/ArknightsGameData)，含全量干员信息、官方档案（生日/种族/身高/简介）与 **807 个肉鸽藏品**（含效果/描述，如"高卢银行支票"），干员生日、藏品效果、资料类问题**本地秒回**（约 1-2s，提速约 10 倍），不依赖联网
 - **方舟物品检索**：问题涉及干员名、材料（凝胶/聚合剂/D32钢等）、敌人、关卡时会自动触发 PRTS.Wiki 检索，降低 LLM 凭空回答的幻觉
 - **健壮性**：LLM 请求并发限流（默认 3）、概括 per-group 互斥、WS 连接校验、日志按天轮转、缓存命中不续期
 - **知识缓存**：检索结果缓存到 `data/knowledge_cache.json`，同问题二次提问直接命中缓存（提速约 6 倍），缓存 TTL 可配置
@@ -102,9 +102,13 @@ curl -o data/ark/character_table.json \
 # 干员档案（含生日/种族/简介，约 5.5MB）
 curl -o data/ark/handbook_info_table.json \
   https://raw.githubusercontent.com/Kengxxiao/ArknightsGameData/master/zh_CN/gamedata/excel/handbook_info_table.json
+
+# 肉鸽藏品（含效果/描述，约 17MB，可选）
+curl -o data/ark/roguelike_topic_table.json \
+  https://raw.githubusercontent.com/Kengxxiao/ArknightsGameData/master/zh_CN/gamedata/excel/roguelike_topic_table.json
 ```
 
-部署后，干员生日、档案类问题（如"能天使生日"、"波登可是谁"）将**本地秒回**（约 1-2s），无需联网检索。
+部署后，干员生日、档案类问题（如"能天使生日"、"波登可是谁"）以及肉鸽藏品问题（如"高卢银行支票是什么"）将**本地秒回**（约 1-2s），无需联网检索。
 
 > 仓库提供 `lingo.example.json` 词典模板（含常用干员绰号、方舟梗、知名 UP 主等 38 条），
 > 可复制到 `data/lingo.json` 使用。`data/` 目录已被 `.gitignore` 排除，你的本地词典不会误传。
