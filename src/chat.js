@@ -202,12 +202,16 @@ export class ChatBot {
       return this._reply(groupId, userName, question, knowledgeContext, userId);
     }
 
-    // 3. 联网检索 + 评分排序
+    // 3. 联网检索 + 评分排序（带超时，避免单个来源拖垮响应）
     const scored = [];
+    const withTimeout = (promise, ms) => Promise.race([
+      promise,
+      new Promise((_, rej) => setTimeout(() => rej(new Error(`超时 ${ms}ms`)), ms)),
+    ]);
 
     if (isArk) {
       try {
-        const r = await this.wiki.retrieve(question);
+        const r = await withTimeout(this.wiki.retrieve(question), 8000);
         if (r.context) {
           scored.push({ source: 'prts', trustLabel: 'PRTS.Wiki', context: r.context, sources: r.sources, score: scoreResult('prts', { size: r.scoreSize || 0 }) });
           log(`[chat] 群 ${groupId} 检索到 PRTS.Wiki: ${r.sources.join(', ')}`);
@@ -217,7 +221,7 @@ export class ChatBot {
       }
 
       try {
-        const m = await this.moegirl.retrieve(question);
+        const m = await withTimeout(this.moegirl.retrieve(question), 10000);
         if (m.context) {
           scored.push({ source: 'moegirl', trustLabel: '萌娘百科', context: m.context, sources: m.sources, score: scoreResult('moegirl', { size: m.scoreSize || 0 }) });
           log(`[chat] 群 ${groupId} 检索到萌娘百科: ${m.sources.join(', ')}`);

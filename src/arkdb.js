@@ -100,7 +100,11 @@ export class ArkDB {
     if (!name) return null;
     this.load();
     const n = String(name).trim();
+    if (n.length === 0) return null;
     if (this.relics.has(n)) return this.relics.get(n);
+    // 模糊匹配：短词（≤2字）不模糊匹配，避免"高卢"误配"高卢小圆饼"
+    if (n.length <= 2) return null;
+    // 优先匹配包含关系：查询词包含在藏品名中（如"支票"→"高卢银行支票"）
     for (const [key, r] of this.relics) {
       if (key.length > 0 && key.includes(n)) return r;
     }
@@ -117,7 +121,6 @@ export class ArkDB {
     }
     return false;
   }
-
   _extractProfile(handbook) {
     const text = handbook.storyTextAudio
       ?.map((s) => s.stories?.map((st) => st.storyText || '').join('\n'))

@@ -7,8 +7,7 @@ export function extractKeywords(question) {
   if (!question) return '';
   let text = String(question)
     .replace(/[？?。，,！!、；;：:（()）]/g, ' ')
-    .replace(/(什么时候|啥时候|什么时候|是什么时候|是哪天|哪天|几号|几月|几月几日|几号生日)/g, ' ')
-    .replace(/(什么时候|啥时候|什么时候|是什么时候|是哪天|哪天|几号|几月|几月几日|几号生日)/g, ' ')
+    .replace(/(什么时候|啥时候|是什么时候|是哪天|哪天|几号|几月|几月几日|几号生日)/g, ' ')
     .replace(/(哪里刷|怎么刷|刷哪里|刷哪关|去哪刷|哪关|哪关刷|怎么获取|怎么获得|怎么合成|怎么搞|怎么弄)/g, ' ')
     .replace(/(谁|是什么|是什么人|是啥|哪一关|哪一章|怎么打|怎么过|怎么玩|在哪里|在哪|多少|怎么样|如何|能打|能过|能不能|有什么|干嘛|为何|为什么|求|推荐|介绍|说说|讲讲|知道吗|吗|呢|啊|吧|的|了|是|和|与|在|有|给|问|意思|含义|指|叫|俗称|别称|外号|梗|生日|资料|信息|简介|档案|设定|属性|数据|技能|强度|攻略|排行|评价|今天|哪个|什么|时候|干啥|哪里|哪儿|去哪|需要什么|需要|材料|掉落|掉率|刷取|获取|得到|拿到|哪里出|哪里掉|合成|刷)/g, ' ')
     .replace(/\s+/g, ' ')
@@ -165,13 +164,34 @@ export class WikiRetriever {
     if (!text) return '';
     let out = text;
     out = out.replace(/<ref[\s\S]*?<\/ref>/g, '');
-    out = out.replace(/<[^>]+>/g, '');
+    out = out.replace(/<[^>]+>/g, ' ');
+    // 链接 [[目标|显示]] → 显示
     out = out.replace(/\[\[(?:[^|\]]*\|)?([^\]]+)\]\]/g, '$1');
+    // 模板：保留关键参数行（如 |名称=... |描述=... |用途=...），去掉纯导航模板
+    const paramLines = [];
+    out = out.replace(/\{\{(?:道具信息|道具价格|材料信息|敌人信息|关卡信息|物品信息|干员信息|时装信息)[\s\S]*?\}\}/g, (block) => {
+      const lines = block.split(/\r?\n/);
+      for (const line of lines) {
+        const m = line.match(/^\s*\|?([A-Za-z\u4e00-\u9fff]+)\s*=\s*(.+)$/);
+        if (m && m[2] && !/^\{\{/.test(m[2])) {
+          const key = m[1].trim();
+          if (['名称', 'name', '描述', '用途', 'description', 'usage', '价格', '稀有度', '分类', '类型', '效果', '冷却', 'duration', 'position', '职业', 'profession', '阵营', 'nation'].includes(key)) {
+            paramLines.push(`${key}：${m[2].trim()}`);
+          }
+        }
+      }
+      return '';
+    });
+    // 去掉其余无关模板
     out = out.replace(/\{\{[^}]*\}\}/g, '');
+    out = out.replace(/\{\{[\s\S]*?\}\}/g, '');
+    // 章节标题保留
+    out = out.replace(/^(==+)\s*(.*?)\s*\1$/gm, '\n[标题] $2\n');
     out = out.replace(/'''|''/g, '');
     out = out.replace(/\n{3,}/g, '\n\n');
     out = out.replace(/[ \t]{2,}/g, ' ');
-    return out.trim();
+    const extra = paramLines.join('\n');
+    return (extra ? extra + '\n' : '') + out.trim();
   }
 
   async retrieve(question) {
@@ -182,10 +202,21 @@ export class WikiRetriever {
 
     const pages = [];
     let maxSize = 0;
+    const keywords = extractKeywords(question) || question;
     for (const hit of hits.slice(0, this.topK)) {
       const content = await this.getPageContent(hit.title);
       if (content) {
-        pages.push({ title: hit.title, content, size: hit.size || 0, wordcount: hit.wordcount || 0 });
+        // 若页面较长且包含关键词，优先定位关键词相关段落
+        let final = content;
+        const kw = String(keywords).trim();
+        if (kw && content.length > this.maxCharPerPage * 0.6) {
+          const idx = content.indexOf(kw);
+          if (idx > 0) {
+            const start = Math.max(0, idx - 100);
+            final = content.slice(start, start + this.maxCharPerPage);
+          }
+        }
+        pages.push({ title: hit.title, content: final, size: hit.size || 0, wordcount: hit.wordcount || 0 });
         maxSize = Math.max(maxSize, hit.size || 0);
       }
     }

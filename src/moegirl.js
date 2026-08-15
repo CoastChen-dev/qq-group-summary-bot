@@ -154,11 +154,13 @@ export class MoegirlRetriever {
 
     // 2. 若不足，从方舟梗主页面补充检索相关段落
     if (pages.length < this.topK) {
-      // 先在所有兜底页面中寻找关键词命中（优先级最高）
+      // 先在所有兜底页面中寻找关键词命中（优先级最高），最多扫描 5 个避免太慢
       let hitPage = null;
+      let scanned = 0;
       for (const page of ARK_LINGO_PAGES) {
         if (seen.has(page)) continue;
         seen.add(page);
+        if (++scanned > 5) break;
         try {
           const html = await this.getPageHtml(page);
           const body = this.extractBody(html);
