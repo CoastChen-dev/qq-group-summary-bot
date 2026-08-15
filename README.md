@@ -12,6 +12,8 @@
   - **本地梗词典** `data/lingo.json`：可手动维护 + 命中即用（最快）
   - **PRTS.Wiki**：明日方舟数据（干员/关卡/机制）
   - **萌娘百科**：社区梗/黑话/文化词条（如"轮椅轴"、"明日方舟/梗"）
+- **知识缓存**：检索结果缓存到 `data/knowledge_cache.json`，同问题二次提问直接命中缓存（提速约 6 倍），缓存 TTL 可配置
+- **按可信度/热度排序**：多来源结果按来源可信度（词典>PRTS>萌娘）与热度（页面篇幅）综合评分排序，优先用最可能相关的资料
 - **每日 9:00** 自动统计昨日各群消息，将「昨日活跃群（≥100 条）日报」**私聊发送**给指定 QQ
 - **静默时段**（默认 0:00-8:00）：不响应任何总结请求
 - **离线补偿**：每次启动时自动从**上次下线时刻**（持久化的最后在线时间）拉取错过的历史消息，重启/掉线也能补齐
@@ -32,6 +34,7 @@ src/
   wiki.js       PRTS.Wiki 检索器（MediaWiki API）
   moegirl.js    萌娘百科检索器（社区梗/黑话）
   lingo.js      本地梗词典（可维护 + 学习）
+  cache.js      知识缓存（加速重复提问）
   scheduler.js  定时调度器
   filter.js     敏感内容过滤
   logger.js     日志
@@ -80,6 +83,7 @@ cp config.example.json config.json   # 复制模板
 - `llm.wikiApiUrl` / `wikiMaxResults` / `wikiMaxCharPerPage` / `wikiTopK`：PRTS.Wiki 检索参数
 - `llm.moegirlEnabled` / `moegirlMaxCharPerPage` / `moegirlTopK`：萌娘百科检索参数
 - `llm.lingoFile`：本地梗词典文件路径（默认 `data/lingo.json`，可手动编辑维护）
+- `llm.cacheFile` / `cacheTtlHours`：知识缓存文件与 TTL（默认 168 小时）
 - `schedule`：日报任务时间（`hour`/`minute`，默认 9:00）
 - `minMessages`：手动总结低于该消息条数时跳过
 - `report`：日报配置

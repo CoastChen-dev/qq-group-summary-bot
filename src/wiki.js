@@ -110,11 +110,13 @@ export class WikiRetriever {
         list: 'search',
         srsearch: query,
         srlimit: String(this.maxResults),
-        srprop: 'snippet',
+        srprop: 'snippet|wordcount|size',
       });
       const results = (data?.query?.search || []).map((r) => ({
         title: r.title,
         snippet: (r.snippet || '').replace(/<[^>]+>/g, ''),
+        size: r.size ?? 0,
+        wordcount: r.wordcount ?? 0,
       }));
       log(`[wiki] 搜索 "${title}" → ${results.length} 条结果`);
       return results;
@@ -161,9 +163,13 @@ export class WikiRetriever {
     if (hits.length === 0) return { context: '', sources: [] };
 
     const pages = [];
+    let maxSize = 0;
     for (const hit of hits.slice(0, this.topK)) {
       const content = await this.getPageContent(hit.title);
-      if (content) pages.push({ title: hit.title, content });
+      if (content) {
+        pages.push({ title: hit.title, content, size: hit.size || 0, wordcount: hit.wordcount || 0 });
+        maxSize = Math.max(maxSize, hit.size || 0);
+      }
     }
 
     const context = pages
@@ -171,6 +177,6 @@ export class WikiRetriever {
       .join('\n\n---\n\n')
       .slice(0, this.topK * this.maxCharPerPage);
 
-    return { context, sources: pages.map((p) => p.title) };
+    return { context, sources: pages.map((p) => p.title), scoreSize: maxSize };
   }
 }

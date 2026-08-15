@@ -109,6 +109,7 @@ export class MoegirlRetriever {
 
     const context = pages.map((p) => `【${p.title}】\n${p.content}`).join('\n\n---\n\n');
     log(`[moegirl] 关键词 "${keyword}" → ${pages.length} 个词条`);
-    return { context, sources: pages.map((p) => p.title) };
+    const totalSize = pages.reduce((acc, p) => acc + (p.content?.length || 0), 0);
+    return { context, sources: pages.map((p) => p.title), scoreSize: totalSize };
   }
 }

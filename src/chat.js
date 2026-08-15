@@ -2,6 +2,21 @@ import { log } from './logger.js';
 import { WikiRetriever, isArknightsRelated } from './wiki.js';
 import { MoegirlRetriever } from './moegirl.js';
 import { LingoStore } from './lingo.js';
+import { KnowledgeCache } from './cache.js';
+
+// 来源可信度权重（分数越高越可信）
+const SOURCE_TRUST = {
+  lingo: 100,
+  prts: 80,
+  moegirl: 60,
+};
+
+// 根据热度(size/wordcount)与来源可信度综合评分
+function scoreResult(source, { size = 0, wordcount = 0, title = '' } = {}) {
+  const trust = SOURCE_TRUST[source] || 50;
+  const hotness = Math.log10(Math.max(size, 1)) * 15 + Math.log10(Math.max(wordcount, 1)) * 10;
+  return trust + hotness;
+}
 
 export class ChatBot {
   constructor(cfg = {}) {
@@ -15,6 +30,7 @@ export class ChatBot {
     this.wiki = new WikiRetriever(cfg);
     this.moegirl = new MoegirlRetriever(cfg);
     this.lingo = new LingoStore(cfg.lingoFile);
+    this.cache = new KnowledgeCache(cfg.cacheFile, { ttlHours: cfg.cacheTtlHours ?? 168 });
 
     this.groupHistory = new Map();
   }
@@ -62,29 +78,39 @@ export class ChatBot {
     const lingoHit = this.lingo.lookup(question);
     const isArk = isArknightsRelated(question) || !!lingoHit;
 
-    // 1. 本地词典（梗/黑话，最快）
+    // 1. 本地词典（梗/黑话，最快、可信度最高）
     if (lingoHit) {
-      knowledgeParts.push(`【本地梗词典】${lingoHit.term}：${lingoHit.meaning}`);
+      this.cache.hit(`lingo:${lingoHit.term}`);
       log(`[chat] 群 ${groupId} 命中本地词典词条: ${lingoHit.term}`);
     }
 
-    // 2. PRTS.Wiki（方舟数据）
+    // 2. 尝试命中本地知识缓存（加速）
+    const cached = this.cache.get(`q:${question}`);
+    if (cached && cached.context) {
+      this.cache.hit(`q:${question}`);
+      const knowledgeContext = cached.context;
+      log(`[chat] 群 ${groupId} 命中本地知识缓存（命中${cached.hits + 1}次）`);
+      return this._reply(groupId, userName, question, knowledgeContext);
+    }
+
+    // 3. 联网检索 + 评分排序
+    const scored = [];
+
     if (isArk) {
       try {
         const r = await this.wiki.retrieve(question);
         if (r.context) {
-          knowledgeParts.push(`【PRTS.Wiki】\n${r.context}`);
+          scored.push({ source: 'prts', trustLabel: 'PRTS.Wiki', context: r.context, sources: r.sources, score: scoreResult('prts', { size: r.scoreSize || 0 }) });
           log(`[chat] 群 ${groupId} 检索到 PRTS.Wiki: ${r.sources.join(', ')}`);
         }
       } catch (e) {
         log(`[chat] PRTS.Wiki 检索失败: ${e.message}`);
       }
 
-      // 3. 萌娘百科（梗/黑话/社区文化）
       try {
         const m = await this.moegirl.retrieve(question);
         if (m.context) {
-          knowledgeParts.push(`【萌娘百科】\n${m.context}`);
+          scored.push({ source: 'moegirl', trustLabel: '萌娘百科', context: m.context, sources: m.sources, score: scoreResult('moegirl', { size: m.scoreSize || 0 }) });
           log(`[chat] 群 ${groupId} 检索到萌娘百科: ${m.sources.join(', ')}`);
         }
       } catch (e) {
@@ -94,7 +120,30 @@ export class ChatBot {
       log(`[chat] 群 ${groupId} 问题与方舟无关，跳过知识库检索`);
     }
 
-    const knowledgeContext = knowledgeParts.join('\n\n---\n\n');
+    // 本地词典作为最高可信度条目
+    if (lingoHit) {
+      scored.unshift({
+        source: 'lingo',
+        trustLabel: '本地梗词典',
+        context: `【本地梗词典】${lingoHit.term}：${lingoHit.meaning}`,
+        sources: [lingoHit.term],
+        score: scoreResult('lingo'),
+      });
+    }
+
+    // 按评分从高到低排序
+    scored.sort((a, b) => b.score - a.score);
+    log(`[chat] 群 ${groupId} 知识来源排序: ${scored.map((s) => `${s.trustLabel}(${Math.round(s.score)})`).join(' > ')}`);
+
+    const knowledgeContext = scored.map((s) => s.context).join('\n\n---\n\n');
+    if (knowledgeContext) {
+      this.cache.set(`q:${question}`, { context: knowledgeContext, sources: scored.map((s) => s.sources).flat(), hits: 0 });
+    }
+
+    return this._reply(groupId, userName, question, knowledgeContext);
+  }
+
+  async _reply(groupId, userName, question, knowledgeContext) {
     const messages = this.buildMessages(groupId, userName, question, knowledgeContext);
     this.pushMessage(groupId, 'user', `${userName}：${question}`);
 
