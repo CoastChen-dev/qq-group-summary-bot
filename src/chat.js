@@ -145,7 +145,9 @@ export class ChatBot {
     if (!this.enabled) return null;
 
     const lingoHit = this.lingo.lookup(question);
-    const isArk = isArknightsRelated(question) || !!lingoHit || this._looksLikeLingoQuestion(question);
+    // 命中本地数据库干员名/别名也视为方舟相关，提高物品/角色问题触发检索的概率
+    const arkNameHit = this.arkdb ? this.arkdb.containsOperatorName(question) : false;
+    const isArk = isArknightsRelated(question) || !!lingoHit || arkNameHit || this._looksLikeLingoQuestion(question);
 
     // 本地干员数据库：生日/干员档案类问题优先本地查询（快速、准确）
     let arkdbContext = '';

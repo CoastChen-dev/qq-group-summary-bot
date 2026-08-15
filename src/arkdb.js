@@ -108,6 +108,17 @@ export class ArkDB {
     return null;
   }
 
+  // 判断一段文本是否包含任何干员名/别名（≥2字），用于触发方舟检索
+  containsOperatorName(text) {
+    if (!text) return false;
+    this.load();
+    const t = String(text);
+    for (const key of this.aliasMap.keys()) {
+      if (key.length >= 2 && t.includes(key)) return true;
+    }
+    return false;
+  }
+
   getById(id) {
     const base = this.characters.get(id);
     const profile = this.handbooks.get(id);
