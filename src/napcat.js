@@ -57,14 +57,9 @@ export class NapCatClient {
       return;
     }
 
+    // 无 echo 的响应：忽略（并发下无法可靠关联，避免错配）
     if (msg.retcode !== undefined || msg.status !== undefined) {
-      const first = this.pending.keys().next().value;
-      if (first !== undefined) {
-        const { resolve, reject } = this.pending.get(first);
-        this.pending.delete(first);
-        if (msg.status === 'ok' && msg.retcode === 0) resolve(msg.data ?? {});
-        else reject(new Error(`OneBot 返回错误: retcode=${msg.retcode} ${msg.message || ''}`));
-      }
+      log(`[napcat] 收到无 echo 的响应（已忽略）: ${msg.status || ''} ${msg.retcode ?? ''}`);
     }
   }
 
@@ -81,6 +76,10 @@ export class NapCatClient {
   call(action, params = {}) {
     const echo = String(++this.seq);
     return new Promise((resolve, reject) => {
+      if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+        reject(new Error(`WS 未连接，无法调用 ${action}`));
+        return;
+      }
       this.pending.set(echo, { resolve, reject });
       this.ws.send(JSON.stringify({ action, params, echo }));
       setTimeout(() => {

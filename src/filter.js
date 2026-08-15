@@ -1,10 +1,15 @@
 const PRIVACY_PATTERNS = [
-  /\b1[3-9]\d{9}\b/g,
-  /\b\d{11}\b/g,
+  // 大陆手机号：1[3-9] 开头 11 位
+  /(?<![0-9])1[3-9]\d{9}(?![0-9])/g,
+  // 邮箱
   /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g,
+  // 身份证号 18 位
   /\b\d{17}[\dXx]\b/g,
-  /\b\d{4}[- ]?\d{4}[- ]?\d{4}[- ]?\d{4}\b/g,
-  /[\u4e00-\u9fff]{1,5}(?:省|市|区|县|镇|村|路|街|号|栋|楼|单元|室)/g,
+  // 银行卡号（13-19 位）
+  /\b(?:\d{4}[- ]?){3,4}\d{1,3}\b/g,
+  // 地址：行政区划词（省可选）+ 市/区/县 + 具体路名/大道（紧邻组合，避免单字误伤）
+  /(?:[\u4e00-\u9fff]{1,6}?(?:省|自治区|特别行政区))?[\u4e00-\u9fff]{1,8}?(?:市|自治州|区|县|镇|乡|街道)[\u4e00-\u9fff]{1,10}?(?:路|街|大道|巷|胡同|弄)/g,
+  // IP 地址
   /\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b/g,
 ];
 
@@ -28,6 +33,7 @@ export function isSensitive(text) {
     if (text.includes(kw)) return true;
   }
   for (const re of PRIVACY_PATTERNS) {
+    re.lastIndex = 0; // 带 g 标志的正则需重置，避免跨调用 lastIndex 残留
     if (re.test(text)) return true;
   }
   return false;
@@ -37,6 +43,7 @@ export function sanitizeText(text) {
   if (!text) return text;
   let out = text;
   for (const re of PRIVACY_PATTERNS) {
+    re.lastIndex = 0;
     out = out.replace(re, PLACEHOLDER);
   }
   return out;

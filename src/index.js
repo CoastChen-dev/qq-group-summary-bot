@@ -56,6 +56,7 @@ const filterMessages = (recs) => (filterEnabled ? filterMessagesRaw(recs) : { ke
 let selfId = config.napcat.selfId || 0;
 let ready = false;
 let backfillDone = false;
+const summaryInFlight = new Set();
 
 for (const gid of trackedGroups()) {
   store.loadFromDisk(gid);
@@ -78,6 +79,19 @@ function extractQuestion(rec, mentionedSelf) {
 
 async function triggerSummary(groupId, opts = {}) {
   if (!ready) return;
+  if (summaryInFlight.has(groupId)) {
+    log(`[group ${groupId}] 已有概括进行中，忽略重复指令`);
+    return;
+  }
+  summaryInFlight.add(groupId);
+  try {
+    await doSummary(groupId, opts);
+  } finally {
+    summaryInFlight.delete(groupId);
+  }
+}
+
+async function doSummary(groupId, opts = {}) {
   const nowSec = Math.floor(Date.now() / 1000);
   let since = store.getLastSummaryAt(groupId);
   if (!since) since = nowSec - 60 * 60;
@@ -274,7 +288,7 @@ client.onEvent((event) => {
   }
 
   const senderName = event.sender?.card || event.sender?.nickname || '群友';
-  chatBot.chat(event.group_id, senderName, question)
+  chatBot.chat(event.group_id, senderName, question, event.user_id)
     .then((reply) => {
       if (reply) return client.sendGroupMsg(event.group_id, reply);
     })

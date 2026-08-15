@@ -12,6 +12,36 @@ const SOURCE_TRUST = {
   moegirl: 60,
 };
 
+// 简单信号量：限制并发数
+class Semaphore {
+  constructor(max = 3) {
+    this.max = max;
+    this.active = 0;
+    this.queue = [];
+  }
+  async acquire() {
+    if (this.active < this.max) {
+      this.active++;
+      return;
+    }
+    await new Promise((resolve) => this.queue.push(resolve));
+    this.active++;
+  }
+  release() {
+    this.active--;
+    const next = this.queue.shift();
+    if (next) next();
+  }
+  async run(fn) {
+    await this.acquire();
+    try {
+      return await fn();
+    } finally {
+      this.release();
+    }
+  }
+}
+
 // 根据热度(size/wordcount)与来源可信度综合评分
 function scoreResult(source, { size = 0, wordcount = 0, title = '' } = {}) {
   const trust = SOURCE_TRUST[source] || 50;
@@ -34,17 +64,20 @@ export class ChatBot {
     this.cache = new KnowledgeCache(cfg.cacheFile, { ttlHours: cfg.cacheTtlHours ?? 168 });
     this.arkdb = new ArkDB(cfg.arkdbDir);
 
+    // 全局并发信号量：同时最多 3 个 LLM 请求，避免 API 限流
+    this.semaphore = new Semaphore(cfg.chatConcurrency ?? 3);
+
     this.groupHistory = new Map();
     // 群 → { 昵称: 编号 }，用于内部匿名区分发言者（群友1/群友2...）
     this.groupSpeakers = new Map();
   }
 
   // 返回群内该昵称的匿名标识：群友1、群友2...
-  _speakerLabel(groupId, nickname) {
-    if (!nickname) return '群友';
+  _speakerLabel(groupId, nickname, userId = '') {
+    const key = String(userId || nickname || '');
+    if (!key) return '群友';
     if (!this.groupSpeakers.has(groupId)) this.groupSpeakers.set(groupId, new Map());
     const map = this.groupSpeakers.get(groupId);
-    const key = String(nickname);
     if (map.has(key)) return map.get(key);
     const label = `群友${map.size + 1}`;
     map.set(key, label);
@@ -80,7 +113,7 @@ export class ChatBot {
     if (h.length > this.historyLimit) h.splice(0, h.length - this.historyLimit);
   }
 
-  buildMessages(groupId, userName, question, wikiContext = '') {
+  buildMessages(groupId, userName, question, wikiContext = '', userId = '') {
     const sys = [
       '你是 PRTS，罗德岛的人工智能辅助终端系统，现作为 QQ 群里的助手运行。',
       '性格：整体冷静专业、值得信赖，但说话要像真人一样自然、有温度，不要像说明书或客服模板。',
@@ -99,7 +132,7 @@ export class ChatBot {
     messages.push(...history.slice(-this.historyLimit));
 
     // 用内部匿名编号区分当前提问者，避免真实昵称进入上下文
-    const speaker = this._speakerLabel(groupId, userName);
+    const speaker = this._speakerLabel(groupId, userName, userId);
     let userContent = `${speaker}：${question}`;
     if (wikiContext) {
       userContent += `\n\n以下是检索到的相关资料，可参考其中的事实与梗文化（如有不相关可忽略）：\n${wikiContext}`;
@@ -108,7 +141,7 @@ export class ChatBot {
     return messages;
   }
 
-  async chat(groupId, userName, question) {
+  async chat(groupId, userName, question, userId = '') {
     if (!this.enabled) return null;
 
     const lingoHit = this.lingo.lookup(question);
@@ -131,11 +164,11 @@ export class ChatBot {
     const askBirthday = /生日/.test(String(question));
     if (arkdbHit && askBirthday && arkdbHit.birthday) {
       log(`[chat] 群 ${groupId} 生日问题命中本地数据库，跳过联网`);
-      return this._reply(groupId, userName, question, `【本地干员数据库】${arkdbHit.name}的生日是${arkdbHit.birthday}。`);
+      return this._reply(groupId, userName, question, `【本地干员数据库】${arkdbHit.name}的生日是${arkdbHit.birthday}。`, userId);
     }
     if (arkdbHit && /(是谁|什么干员|介绍|档案|资料|是谁|是什么)/.test(String(question)) && (arkdbHit.desc || arkdbHit.gender)) {
       log(`[chat] 群 ${groupId} 干员资料问题命中本地数据库，跳过联网`);
-      return this._reply(groupId, userName, question, arkdbContext);
+      return this._reply(groupId, userName, question, arkdbContext, userId);
     }
 
     // 生日类问题引导（本地库无结果时）
@@ -155,7 +188,7 @@ export class ChatBot {
       this.cache.hit(`q:${question}`);
       const knowledgeContext = [arkdbContext, birthdayContext, cached.context].filter(Boolean).join('\n\n---\n\n');
       log(`[chat] 群 ${groupId} 命中本地知识缓存（命中${cached.hits + 1}次）`);
-      return this._reply(groupId, userName, question, knowledgeContext);
+      return this._reply(groupId, userName, question, knowledgeContext, userId);
     }
 
     // 3. 联网检索 + 评分排序
@@ -208,38 +241,42 @@ export class ChatBot {
       this.cache.set(`q:${question}`, { context: knowledgeContext, sources: sorted.map((s) => s.sources).flat(), hits: 0 });
     }
 
-    return this._reply(groupId, userName, question, knowledgeContext);
+    return this._reply(groupId, userName, question, knowledgeContext, userId);
   }
 
-  async _reply(groupId, userName, question, knowledgeContext) {
-    const messages = this.buildMessages(groupId, userName, question, knowledgeContext);
-    const speaker = this._speakerLabel(groupId, userName);
-    this.pushMessage(groupId, 'user', `${speaker}：${question}`);
+  async _reply(groupId, userName, question, knowledgeContext, userId = '') {
+    const messages = this.buildMessages(groupId, userName, question, knowledgeContext, userId);
+    const speaker = this._speakerLabel(groupId, userName, userId);
 
     try {
-      const resp = await fetch(`${this.baseUrl}/chat/completions`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${this.apiKey}`,
-        },
-        body: JSON.stringify({
-          model: this.model,
-          messages,
-          temperature: 0.8,
-          max_tokens: this.maxTokens,
-        }),
+      const reply = await this.semaphore.run(async () => {
+        const resp = await fetch(`${this.baseUrl}/chat/completions`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${this.apiKey}`,
+          },
+          body: JSON.stringify({
+            model: this.model,
+            messages,
+            temperature: 0.8,
+            max_tokens: this.maxTokens,
+          }),
+        });
+
+        if (!resp.ok) {
+          const text = await resp.text();
+          throw new Error(`LLM API 错误 ${resp.status}: ${text.slice(0, 300)}`);
+        }
+
+        const data = await resp.json();
+        const content = data.choices?.[0]?.message?.content?.trim();
+        if (!content) throw new Error('LLM 返回内容为空');
+        return content;
       });
 
-      if (!resp.ok) {
-        const text = await resp.text();
-        throw new Error(`LLM API 错误 ${resp.status}: ${text.slice(0, 300)}`);
-      }
-
-      const data = await resp.json();
-      const reply = data.choices?.[0]?.message?.content?.trim();
-      if (!reply) throw new Error('LLM 返回内容为空');
-
+      // LLM 成功返回后才写入历史，避免失败重试累积重复消息
+      this.pushMessage(groupId, 'user', `${speaker}：${question}`);
       this.pushMessage(groupId, 'assistant', reply);
       log(`[chat] 群 ${groupId} ${userName}: ${question.slice(0, 30)} → 已回复`);
       return reply;

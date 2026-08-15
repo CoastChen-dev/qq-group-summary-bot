@@ -6,8 +6,8 @@ export class Summarizer {
     this.apiKey = cfg.apiKey || process.env.LLM_API_KEY || '';
     this.baseUrl = (cfg.baseUrl || 'https://api.openai.com/v1').replace(/\/+$/, '');
     this.model = cfg.model || 'gpt-3.5-turbo';
-    this.maxMessages = cfg.maxMessages || 2000;
-    this.maxTokens = cfg.maxTokens || 1024;
+    this.maxMessages = cfg.maxMessages || 3000;
+    this.maxTokens = cfg.maxTokens || 2048;
   }
 
   async summarize(groupId, recs, spanText, purpose = 'manual') {

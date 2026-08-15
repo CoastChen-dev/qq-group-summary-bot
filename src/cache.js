@@ -63,9 +63,8 @@ export class KnowledgeCache {
     const k = this._normalizeKey(key);
     const entry = this.store.get(k);
     if (!entry) return 0;
+    // 命中只计次数，不刷新 cachedAt，避免热点问题被无限续期
     entry.hits = (entry.hits || 0) + 1;
-    entry.cachedAt = Date.now();
-    this._save();
     return entry.hits;
   }
 

@@ -92,11 +92,18 @@ export class ArkDB {
   findByName(name) {
     if (!name) return null;
     this.load();
-    const id = this.aliasMap.get(name);
+    const n = String(name).trim();
+    if (n.length === 0) return null;
+
+    const id = this.aliasMap.get(n);
     if (id) return this.getById(id);
-    // 模糊匹配
+
+    // 模糊匹配：短名（≤2字）要求全词相等，避免"山""陈"等单字误配大量干员
+    if (n.length <= 2) {
+      return null;
+    }
     for (const [key, cid] of this.aliasMap) {
-      if (key.includes(name) || name.includes(key)) return this.getById(cid);
+      if (key.length > 0 && key !== n && (key.includes(n) || n.includes(key))) return this.getById(cid);
     }
     return null;
   }
