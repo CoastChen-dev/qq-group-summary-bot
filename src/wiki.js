@@ -3,6 +3,16 @@ import { log } from './logger.js';
 const API_URL = 'https://prts.wiki/api.php';
 const UA = 'PRTS-AI-Bot/1.0 (QQ Group Chat Bot; contact: local)';
 
+export function extractKeywords(question) {
+  if (!question) return '';
+  let text = String(question)
+    .replace(/[？?。，,！!、；;：:（()）]/g, ' ')
+    .replace(/(谁|是什么|是什么人|是啥|哪一关|哪一章|怎么打|怎么过|怎么玩|在哪里|在哪|多少|怎么样|如何|能打|能过|能不能|有什么|干嘛|为何|为什么|求|推荐|介绍|说说|讲讲|知道吗|吗|呢|啊|吧|的|了|是|和|与|在|有|给|问|意思|含义|指|叫|俗称|别称|外号|梗)/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return text;
+}
+
 // 明日方舟相关关键词（用于判断是否检索 PRTS.Wiki）
 const ARK_KEYWORDS = [
   '明日方舟', '方舟', '阿米娅', '博士', '罗德岛', '干员', 'PRTS', 'prts',
@@ -90,20 +100,10 @@ export class WikiRetriever {
     throw lastErr || new Error('Wiki 请求失败');
   }
 
-  _extractKeywords(question) {
-    if (!question) return '';
-    let text = question
-      .replace(/[？?。，,！!、；;：:（()）]/g, ' ')
-      .replace(/(谁|是什么|是什么人|是啥|哪一关|哪一章|怎么打|怎么过|怎么玩|在哪里|在哪|多少|怎么样|如何|能打|能过|能不能|有什么|干嘛|为何|为什么|求|推荐|介绍|说说|讲讲|知道吗|吗|呢|啊|吧|的|了|是|和|与|在|有|给|问)/g, ' ')
-      .replace(/\s+/g, ' ')
-      .trim();
-    return text;
-  }
-
   async search(title) {
     if (!this.enabled || !title) return [];
     this.lastQuery = title;
-    const query = this._extractKeywords(title) || title;
+    const query = extractKeywords(title) || title;
     try {
       const data = await this._get({
         action: 'query',

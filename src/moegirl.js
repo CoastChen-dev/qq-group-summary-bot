@@ -1,12 +1,19 @@
 import { log } from './logger.js';
+import { extractKeywords } from './wiki.js';
 
 const API_URL = 'https://zh.moegirl.org.cn/api.php';
 const SITE_URL = 'https://zh.moegirl.org.cn';
 const UA = 'PRTS-AI-Bot/1.0 (QQ Group Chat Bot; contact: local)';
 const BROWSER_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36';
 
-// 与明日方舟社区梗/黑话相关的萌娘百科主词条
-const ARK_LINGO_PAGES = ['明日方舟/梗', '明日方舟'];
+// 与明日方舟社区梗/黑话相关的萌娘百科主词条（梗可能收录在这些页面中）
+const ARK_LINGO_PAGES = [
+  '明日方舟/梗',
+  '明日方舟',
+  '魔法Zc目录',
+  '龙哥哥今天又鸽了',
+  '明日方舟UP主',
+];
 
 export class MoegirlRetriever {
   constructor(cfg = {}) {
@@ -38,6 +45,9 @@ export class MoegirlRetriever {
   _keywordVariants(keyword) {
     const variants = new Set([String(keyword).trim()]);
     const t = String(keyword).trim();
+    // 从混合文本中提取纯数字（如 "325 意思" → "325"）
+    const pureNum = t.match(/\d+/);
+    if (pureNum) variants.add(pureNum[0]);
     const numMatch = t.match(/^(\d+)$/);
     if (numMatch) {
       const digits = numMatch[1];
@@ -106,7 +116,8 @@ export class MoegirlRetriever {
 
     const pages = [];
     const seen = new Set();
-    const variants = this._keywordVariants(keyword);
+    const core = extractKeywords(keyword) || String(keyword).trim();
+    const variants = this._keywordVariants(core);
 
     // 1. 尝试直接搜关键词对应词条
     try {
@@ -130,30 +141,30 @@ export class MoegirlRetriever {
 
     // 2. 若不足，从方舟梗主页面补充检索相关段落
     if (pages.length < this.topK) {
+      // 先在所有兜底页面中寻找关键词命中（优先级最高）
+      let hitPage = null;
       for (const page of ARK_LINGO_PAGES) {
-        if (seen.has(page) || pages.length >= this.topK) break;
+        if (seen.has(page)) continue;
         seen.add(page);
         try {
           const html = await this.getPageHtml(page);
           const body = this.extractBody(html);
-          if (body) {
-            // 尝试用关键词多种变体定位相关段落
-            let content = null;
-            for (const v of variants) {
-              const kwIdx = body.indexOf(v);
-              if (kwIdx > 0) {
-                const start = Math.max(0, kwIdx - 200);
-                content = body.slice(start, start + this.maxCharPerPage);
-                log(`[moegirl] 在 "${page}" 中定位到 "${v}"`);
-                break;
-              }
+          for (const v of variants) {
+            const kwIdx = body.indexOf(v);
+            if (kwIdx > 0) {
+              const start = Math.max(0, kwIdx - 200);
+              hitPage = { title: page, content: body.slice(start, start + this.maxCharPerPage) };
+              log(`[moegirl] 在 "${page}" 中定位到 "${v}"`);
+              break;
             }
-            if (!content) content = body.slice(0, this.maxCharPerPage);
-            pages.push({ title: page, content });
           }
+          if (hitPage) break;
         } catch {
           /* 跳过 */
         }
+      }
+      if (hitPage) {
+        pages.unshift(hitPage);
       }
     }
 
