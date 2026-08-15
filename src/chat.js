@@ -61,11 +61,13 @@ export class ChatBot {
     return this.groupHistory.get(groupId);
   }
 
-  // 识别"XX是什么意思/是什么梗"这类提问，即使不命中关键词表也尝试检索
+  // 识别"XX是什么意思/是什么梗/XX是谁"这类提问，即使不命中关键词表也尝试检索
   _looksLikeLingoQuestion(question) {
     if (!question) return false;
     const t = String(question);
     if (/意思|什么梗|啥意思|咋回事|由来|来历|出处|梗|黑话|简称/.test(t)) return true;
+    // 中文/数字名 + 提问词，如 "普瑞塞斯是谁" "325是什么" "JT8-3是啥"
+    if (/(是谁|是啥|是谁呀|什么人物|什么人|是哪位|是干什么的|是干嘛的)/.test(t)) return true;
     // 纯数字/短词提问，如 "325是什么" "JT8-3" 
     if (/^(什么|是啥|是)[^\s]{1,10}$/.test(t)) return true;
     if (/^[0-9A-Za-z\-]{1,10}(是什么|是啥|什么意思|是啥意思)/.test(t)) return true;
