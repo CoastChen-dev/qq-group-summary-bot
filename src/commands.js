@@ -89,12 +89,31 @@ export function tryCommand(ctx, text) {
     return '【当前卡池】\n' + lines.join('\n') + '\n\n用法：十连 1 / 单抽 卡池名关键字';
   }
 
-  if ((m = t.match(/^(单抽|十连|抽卡)\s*(.*)$/))) {
+  // ---- 抽卡记录 / 欧气榜（先于抽卡命令，避免"抽卡记录"被"抽卡"匹配）----
+  if ((m = t.match(/^(抽卡记录|我的抽卡|抽卡统计)\s*(\d*)$/))) {
+    if (!ctx.analytics || ctx.groupId === undefined || ctx.userId === undefined) return '抽卡记录功能未启用';
+    const limit = Math.min(Math.max(parseInt(m[2] || '10', 10) || 10, 1), 50);
+    const { rows, total, six, five } = ctx.analytics.myPulls(ctx.groupId, ctx.userId, limit);
+    if (!rows.length) return '你还没有抽卡记录，试试「十连」吧';
+    const list = rows.map((r) => `${r.star} ${r.operator}${r.is_up ? ' ↑UP' : ''}（${r.pool_name}）`).join('\n');
+    return `【你的抽卡记录（最近 ${rows.length} 抽）】\n${list}\n\n累计 ${total} 抽 | 6★ ×${six} | 5★ ×${five}`;
+  }
+  if (t === '谁最欧' || t === '群欧皇' || t === '欧气榜') {
+    if (!ctx.analytics || ctx.groupId === undefined) return '欧气榜功能未启用';
+    const rows = ctx.analytics.luckiest(ctx.groupId);
+    if (!rows.length) return '本群还没有抽卡记录';
+    return '【本群欧气榜（按6★数量）】\n' + rows.map((r, i) => `${i + 1}. ${r.name}：${r.six} 个6★ / ${r.total} 抽`).join('\n');
+  }
+
+  if ((m = t.match(/^(单抽|十连|抽卡)(?:\s+(?!记录|统计|历史)(.*))?$/))) {
     const kind = m[1];
-    const arg = m[2].trim();
+    const arg = (m[2] || '').trim();
     const count = kind === '单抽' ? 1 : 10;
     const pools = ctx.arkdb.currentGachaPools();
-    if (!pools.length) return ctx.arkdb.randomPull(count);
+    if (!pools.length) {
+      const results = ctx.arkdb.randomPull(count);
+      return `【${kind}·常驻模拟】\n${results.map((r) => `${r.star} ${r.name}`).join('\n')}`;
+    }
     let pool = pools[0];
     if (arg) {
       if (/^\d+$/.test(arg)) {
@@ -110,8 +129,16 @@ export function tryCommand(ctx, text) {
     const upDesc = up6Names.length || up5Names.length
       ? `（6★UP：${up6Names.join('/') || '无'}；5★UP：${up5Names.join('/') || '无'}）`
       : '';
-    const result = ctx.arkdb.pullFromPool(pool, count);
-    return `【${kind}·${pool.gachaPoolName}】${upDesc}\n${result}`;
+    const poolName = pool?.gachaPoolName || '常驻模拟';
+    const results = ctx.arkdb.pullFromPool(pool, count);
+    // 记录抽卡历史
+    if (ctx.analytics && ctx.groupId !== undefined && ctx.userId !== undefined) {
+      for (const r of results) {
+        ctx.analytics.recordPull(ctx.groupId, ctx.userId, ctx.userName || '', poolName, r.star, r.name, r.up);
+      }
+    }
+    const formatted = results.map((r) => `${r.star} ${r.name}${r.up ? ' ↑UP' : ''}`).join('\n');
+    return `【${kind}·${poolName}】${upDesc}\n${formatted}`;
   }
 
   // ---- 统计（依赖 SQLite 分析层）----

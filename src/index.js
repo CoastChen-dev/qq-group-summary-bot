@@ -40,20 +40,62 @@ const scheduler = new Scheduler(config.schedule || {});
 const analytics = new Analytics(path.join(dataDir, 'messages.db'), path.join(dataDir, 'messages'));
 const refresher = new DataRefresher(path.join(dataDir, 'ark'), config.dataRefresh || {});
 
-// 命令上下文（词典学习/干员查询/藏品查询/统计）
-const cmdCtx = { lingo: chatBot.lingo, arkdb: chatBot.arkdb, analytics };
-
-// 定期更新本地数据库（ArknightsGameData）
+// 定期更新本地数据库（ArknightsGameData），带新增内容播报
 async function refreshData(notifyGroupId = null) {
   log('[refresh] 开始更新本地数据...');
-  const { updated, failed } = await refresher.refresh();
+
+  // 快照旧数据（用于新增播报对比）
+  chatBot.arkdb.load();
+  const oldHighOps = new Map();
+  for (const c of chatBot.arkdb.characters.values()) {
+    if ((c.rarity === 'TIER_6' || c.rarity === 'TIER_5') && c.name && chatBot.arkdb._isOperator(c)) {
+      oldHighOps.set(c.id, c.name);
+    }
+  }
+  const oldPoolIds = new Set(chatBot.arkdb.gachaPools.map((p) => p.gachaPoolId));
+
+  const { updated, unchanged, failed } = await refresher.refresh();
+
+  let announce = '';
   if (updated.length > 0) {
     chatBot.arkdb.reload();
     log('[refresh] 内存数据已重新加载');
+
+    // 对比新增内容
+    const new6 = [];
+    const new5 = [];
+    for (const c of chatBot.arkdb.characters.values()) {
+      if (!c.name || !chatBot.arkdb._isOperator(c)) continue;
+      if (!oldHighOps.has(c.id)) {
+        if (c.rarity === 'TIER_6') new6.push(c.name);
+        else if (c.rarity === 'TIER_5') new5.push(c.name);
+      }
+    }
+    const now = Math.floor(Date.now() / 1000);
+    const newPools = [];
+    for (const p of chatBot.arkdb.gachaPools) {
+      if (!oldPoolIds.has(p.gachaPoolId) && (!p.openTime || p.openTime <= now) && (!p.endTime || p.endTime >= now)) {
+        newPools.push(p.gachaPoolName);
+      }
+    }
+    const parts = [];
+    if (new6.length) parts.push(`新增 6★ 干员：${new6.join('、')}`);
+    if (new5.length) parts.push(`新增 5★ 干员：${new5.join('、')}`);
+    if (newPools.length) parts.push(`新开放卡池：${[...new Set(newPools)].join('、')}`);
+    if (parts.length) announce = `【数据更新播报】\n${parts.join('\n')}`;
   }
-  const msg = `【数据更新】\n成功：${updated.length ? updated.join('、') : '无'}\n${failed.length ? '失败：' + failed.join('、') : '全部成功'}`;
+
+  const msg = `【数据更新】\n成功：${updated.length ? updated.join('、') : '无'}\n未变化：${unchanged.length ? unchanged.join('、') : '无'}\n${failed.length ? '失败：' + failed.join('、') : '全部成功'}`;
   if (notifyGroupId) {
     client.sendGroupMsg(notifyGroupId, msg).catch((e) => err(`[refresh] 通知发送失败:`, e.message));
+    if (announce) client.sendGroupMsg(notifyGroupId, announce).catch(() => {});
+  } else if (announce && config.dataRefresh?.announce !== false) {
+    // 自动更新时向所有监控群播报新增内容
+    const targets = trackedGroups().length ? trackedGroups() : store.trackedGroupIds();
+    for (const gid of targets) {
+      client.sendGroupMsg(gid, announce).catch(() => {});
+    }
+    log('[refresh] 已向群聊播报新增内容');
   }
   return msg;
 }
@@ -339,15 +381,22 @@ client.onEvent((event) => {
     return;
   }
 
-  // 确定性指令路由（词典学习/干员查询/藏品查询/统计等）
-  const cmdReply = tryCommand(cmdCtx, question);
+  // 确定性指令路由（词典学习/干员查询/藏品查询/统计/抽卡等，带群与用户上下文）
+  const senderName = event.sender?.card || event.sender?.nickname || '群友';
+  const cmdReply = tryCommand({
+    lingo: chatBot.lingo,
+    arkdb: chatBot.arkdb,
+    analytics,
+    groupId: event.group_id,
+    userId: event.user_id,
+    userName: senderName,
+  }, question);
   if (cmdReply !== null) {
     log(`[group ${event.group_id}] 指令响应: ${question.slice(0, 30)}`);
     client.sendGroupMsg(event.group_id, cmdReply).catch((e) => err(`[group ${event.group_id}] 指令发送失败:`, e.message));
     return;
   }
 
-  const senderName = event.sender?.card || event.sender?.nickname || '群友';
   chatBot.chat(event.group_id, senderName, question, event.user_id)
     .then((reply) => {
       if (reply) return client.sendGroupMsg(event.group_id, reply);

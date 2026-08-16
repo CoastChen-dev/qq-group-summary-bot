@@ -295,6 +295,7 @@ export class ArkDB {
   }
 
   // 权重抽卡（模拟明日方舟出率：6星2% 5星8% 4星50% 3星40%）
+  // 返回结构化数组 [{star, name, up}]，格式化交给调用方
   randomPull(n = 1) {
     this.load();
     const weights = { TIER_6: 0.02, TIER_5: 0.08, TIER_4: 0.5, TIER_3: 0.4 };
@@ -313,9 +314,9 @@ export class ArkDB {
       const { tier, star } = pickOne();
       const candidates = pool.filter((c) => c.rarity === tier);
       const c = candidates[Math.floor(Math.random() * candidates.length)];
-      results.push(c ? `${star} ${c.name}` : `${star} （未知）`);
+      results.push({ star, name: c ? c.name : '（未知）', up: false });
     }
-    return results.join('\n');
+    return results;
   }
 
   // ---- 真实卡池系统 ----
@@ -392,8 +393,8 @@ export class ArkDB {
     for (let i = 0; i < count; i++) {
       const tier = pickTier();
       const r = pickChar(tier);
-      results.push(`${r.star} ${r.name}${r.up ? ' ↑UP' : ''}`);
+      results.push({ star: r.star, name: r.name, up: r.up });
     }
-    return results.join('\n');
+    return results;
   }
 }

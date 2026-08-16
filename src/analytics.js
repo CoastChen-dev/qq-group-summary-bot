@@ -24,6 +24,18 @@ export class Analytics {
       );
       CREATE INDEX IF NOT EXISTS idx_time ON messages(time);
       CREATE INDEX IF NOT EXISTS idx_group_user ON messages(group_id, user_id);
+      CREATE TABLE IF NOT EXISTS pulls (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        group_id TEXT NOT NULL,
+        user_id TEXT NOT NULL,
+        name TEXT NOT NULL DEFAULT '',
+        time INTEGER NOT NULL,
+        pool_name TEXT NOT NULL DEFAULT '',
+        star TEXT NOT NULL DEFAULT '',
+        operator TEXT NOT NULL DEFAULT '',
+        is_up INTEGER NOT NULL DEFAULT 0
+      );
+      CREATE INDEX IF NOT EXISTS idx_pulls_group_user ON pulls(group_id, user_id);
     `);
     this._imported = false;
   }
@@ -90,5 +102,40 @@ export class Analytics {
       const days = Math.floor((now - r.last) / 86400);
       return `群 ${r.group_id}：${r.cnt} 条（最近活跃 ${days} 天前）`;
     }).join('\n');
+  }
+
+  // ---- 抽卡记录 ----
+  recordPull(groupId, userId, userName, poolName, star, operator, isUp) {
+    try {
+      this.db.prepare(
+        'INSERT INTO pulls (group_id, user_id, name, time, pool_name, star, operator, is_up) VALUES (?,?,?,?,?,?,?,?)'
+      ).run(String(groupId), String(userId), userName || '', Math.floor(Date.now() / 1000), poolName || '', star || '', operator || '', isUp ? 1 : 0);
+    } catch { /* 忽略 */ }
+  }
+
+  myPulls(groupId, userId, limit = 10) {
+    const rows = this.db.prepare(
+      'SELECT pool_name, star, operator, is_up, time FROM pulls WHERE group_id = ? AND user_id = ? ORDER BY id DESC LIMIT ?'
+    ).all(String(groupId), String(userId), limit);
+    const total = this.db.prepare(
+      'SELECT COUNT(*) AS c FROM pulls WHERE group_id = ? AND user_id = ?'
+    ).get(String(groupId), String(userId))?.c ?? 0;
+    const six = this.db.prepare(
+      `SELECT COUNT(*) AS c FROM pulls WHERE group_id = ? AND user_id = ? AND star LIKE '%★★★★★★%'`
+    ).get(String(groupId), String(userId))?.c ?? 0;
+    const five = this.db.prepare(
+      `SELECT COUNT(*) AS c FROM pulls WHERE group_id = ? AND user_id = ? AND star LIKE '%★★★★★%' AND star NOT LIKE '%★★★★★★%'`
+    ).get(String(groupId), String(userId))?.c ?? 0;
+    return { rows, total, six, five };
+  }
+
+  luckiest(groupId) {
+    const rows = this.db.prepare(
+      `SELECT name, user_id, COUNT(*) AS total,
+              SUM(CASE WHEN star LIKE '%★★★★★★%' THEN 1 ELSE 0 END) AS six
+       FROM pulls WHERE group_id = ?
+       GROUP BY user_id HAVING total > 0 ORDER BY six DESC, total DESC LIMIT 10`
+    ).all(String(groupId));
+    return rows;
   }
 }
