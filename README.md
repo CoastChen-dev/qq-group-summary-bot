@@ -114,6 +114,10 @@ curl -o data/ark/handbook_info_table.json \
 # 肉鸽藏品（含效果/描述，约 17MB，可选）
 curl -o data/ark/roguelike_topic_table.json \
   https://raw.githubusercontent.com/Kengxxiao/ArknightsGameData/master/zh_CN/gamedata/excel/roguelike_topic_table.json
+
+# 真实卡池数据（卡池列表 + UP干员，约 436KB，可选，用于抽卡指令）
+curl -o data/ark/gacha_table.json \
+  https://raw.githubusercontent.com/Kengxxiao/ArknightsGameData/master/zh_CN/gamedata/excel/gacha_table.json
 ```
 
 部署后，干员生日、档案类问题（如"能天使生日"、"波登可是谁"）以及肉鸽藏品问题（如"高卢银行支票是什么"）将**本地秒回**（约 1-2s），无需联网检索。
@@ -152,7 +156,8 @@ Windows 下也可直接双击 `start_bot.bat`（后台运行，日志写入 `log
 - **AI 群聊**：在群里 @机器人 直接说话（如「@机器人 你好」「@机器人 阿米娅是谁」），机器人以 AI 群友身份回复，能记住群内最近对话；涉及明日方舟的问题会自动检索 PRTS.Wiki 作为参考
 - **每日日报**：每天 9:00 自动把昨日活跃群（≥100 条消息）的概括私聊发给 `report.userId`
 - **词典学习**：`@机器人 学习 词=释义`（教新梗）、`@机器人 忘记 词`、`@机器人 查词 词`、`@机器人 词典`
-- **任务指令**：`查干员 X`、`查藏品 X`、`干员生日 X`、`今日生日`、`单抽`、`十连`、`活跃榜 [N天]`、`群统计`
+- **任务指令**：`查干员 X`、`查藏品 X`、`干员生日 X`、`今日生日`、`活跃榜 [N天]`、`群统计`
+- **真实卡池抽卡**：`卡池`（列出当前开放卡池及 UP 干员）、`十连 [池号/名称]`、`单抽 [池号/名称]`（基于游戏真实卡池数据与出率：6★2% 5★8% 4★50% 3★40%，UP 干员占其星级概率 50%）
 
 ## Windows 开机自启（可选）
 

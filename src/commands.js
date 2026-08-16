@@ -72,9 +72,47 @@ export function tryCommand(ctx, text) {
       : '今天没有干员过生日';
   }
 
-  // ---- 抽卡 ----
-  if (t === '十连' || t === '十连抽') return `【十连】\n${ctx.arkdb.randomPull(10)}`;
-  if (t === '单抽') return `【单抽】\n${ctx.arkdb.randomPull(1)}`;
+  // ---- 抽卡（真实卡池）----
+  if (t === '卡池' || t === '卡池列表') {
+    const pools = ctx.arkdb.currentGachaPools();
+    if (!pools.length) return '当前没有开放的卡池';
+    const lines = pools.map((p, i) => {
+      const { up6, up5 } = ctx.arkdb.poolRateUps(p);
+      const up6Names = up6.map((id) => ctx.arkdb.characters.get(id)?.name || id);
+      const up5Names = up5.map((id) => ctx.arkdb.characters.get(id)?.name || id);
+      const ups = [];
+      if (up6Names.length) ups.push(`6★UP：${up6Names.join('/')}`);
+      if (up5Names.length) ups.push(`5★UP：${up5Names.join('/')}`);
+      const label = p.guaranteeName || p.gachaRuleType || '';
+      return `${i + 1}. ${label ? `[${label}] ` : ''}${p.gachaPoolName}${ups.length ? `（${ups.join('，')}）` : ''}`;
+    });
+    return '【当前卡池】\n' + lines.join('\n') + '\n\n用法：十连 1 / 单抽 卡池名关键字';
+  }
+
+  if ((m = t.match(/^(单抽|十连|抽卡)\s*(.*)$/))) {
+    const kind = m[1];
+    const arg = m[2].trim();
+    const count = kind === '单抽' ? 1 : 10;
+    const pools = ctx.arkdb.currentGachaPools();
+    if (!pools.length) return ctx.arkdb.randomPull(count);
+    let pool = pools[0];
+    if (arg) {
+      if (/^\d+$/.test(arg)) {
+        pool = pools[parseInt(arg, 10) - 1] || pools[0];
+      } else {
+        const hit = pools.find((p) => p.gachaPoolName.includes(arg) || String(p.gachaPoolId).toLowerCase().includes(arg.toLowerCase()));
+        if (hit) pool = hit;
+      }
+    }
+    const { up6, up5 } = ctx.arkdb.poolRateUps(pool);
+    const up6Names = up6.map((id) => ctx.arkdb.characters.get(id)?.name || id);
+    const up5Names = up5.map((id) => ctx.arkdb.characters.get(id)?.name || id);
+    const upDesc = up6Names.length || up5Names.length
+      ? `（6★UP：${up6Names.join('/') || '无'}；5★UP：${up5Names.join('/') || '无'}）`
+      : '';
+    const result = ctx.arkdb.pullFromPool(pool, count);
+    return `【${kind}·${pool.gachaPoolName}】${upDesc}\n${result}`;
+  }
 
   // ---- 统计（依赖 SQLite 分析层）----
   if ((m = t.match(/^(活跃榜|活跃统计|活跃度)\s*(\d*)$/))) {

@@ -13,6 +13,7 @@ export class ArkDB {
     this.handbooks = new Map();  // charId -> 档案
     this.aliasMap = new Map();   // 别名/名称 -> charId
     this.relics = new Map();     // 藏品名 -> 藏品信息
+    this.gachaPools = [];        // 真实卡池列表
     this._loaded = false;
   }
 
@@ -89,6 +90,18 @@ export class ArkDB {
         log(`[arkdb] 已加载 ${this.relics.size} 个肉鸽藏品`);
       } catch (e) {
         log(`[arkdb] 藏品表加载失败: ${e.message}`);
+      }
+    }
+
+    // 真实卡池表
+    const gachaFile = path.join(this.dataDir, 'gacha_table.json');
+    if (fs.existsSync(gachaFile)) {
+      try {
+        const gt = JSON.parse(fs.readFileSync(gachaFile, 'utf8'));
+        this.gachaPools = (gt.gachaPoolClient || []).filter((p) => p.gachaPoolId && p.gachaPoolName);
+        log(`[arkdb] 已加载 ${this.gachaPools.length} 个卡池`);
+      } catch (e) {
+        log(`[arkdb] 卡池表加载失败: ${e.message}`);
       }
     }
 
@@ -273,7 +286,7 @@ export class ArkDB {
     this.load();
     const weights = { TIER_6: 0.02, TIER_5: 0.08, TIER_4: 0.5, TIER_3: 0.4 };
     const stars = { TIER_6: '★★★★★★', TIER_5: '★★★★★', TIER_4: '★★★★', TIER_3: '★★★' };
-    const pool = [...this.characters.values()].filter((c) => c.name && weights[c.rarity]);
+    const pool = [...this.characters.values()].filter((c) => c.name && weights[c.rarity] && this._isOperator(c));
     const pickOne = () => {
       let r = Math.random();
       for (const [tier, w] of Object.entries(weights)) {
@@ -288,6 +301,82 @@ export class ArkDB {
       const candidates = pool.filter((c) => c.rarity === tier);
       const c = candidates[Math.floor(Math.random() * candidates.length)];
       results.push(c ? `${star} ${c.name}` : `${star} （未知）`);
+    }
+    return results.join('\n');
+  }
+
+  // ---- 真实卡池系统 ----
+
+  // 是否为可抽取的真实干员（排除召唤物 TOKEN / 陷阱 TRAP）
+  _isOperator(c) {
+    return ['MEDIC', 'WARRIOR', 'SPECIAL', 'SNIPER', 'SUPPORT', 'TANK', 'PIONEER', 'CASTER'].includes(c.profession);
+  }
+
+  // 当前开放的卡池
+  currentGachaPools() {
+    this.load();
+    const now = Math.floor(Date.now() / 1000);
+    return this.gachaPools.filter(
+      (p) => (!p.openTime || p.openTime <= now) && (!p.endTime || p.endTime >= now)
+    );
+  }
+
+  // 卡池概率提升干员（from dynMeta）
+  poolRateUps(pool) {
+    const up6 = [];
+    const up5 = [];
+    const d = pool?.dynMeta || {};
+    if (d.main6RarityCharId) up6.push(d.main6RarityCharId);
+    if (Array.isArray(d.rare5CharList)) up5.push(...d.rare5CharList);
+    if (d.rarityPickCharDict) {
+      for (const id of (d.rarityPickCharDict.TIER_6 || []).slice(0, 3)) up6.push(id);
+      for (const id of (d.rarityPickCharDict.TIER_5 || []).slice(0, 3)) up5.push(id);
+    }
+    return {
+      up6: [...new Set(up6)].filter((id) => this.characters.has(id)),
+      up5: [...new Set(up5)].filter((id) => this.characters.has(id)),
+    };
+  }
+
+  // 从指定卡池抽卡（真实出率：6★2% 5★8% 4★50% 3★40%；UP 干员占其星级概率的 50%）
+  pullFromPool(pool, count = 10) {
+    this.load();
+    if (!pool) return this.randomPull(count);
+    const { up6, up5 } = this.poolRateUps(pool);
+    const upSet6 = new Set(up6);
+    const upSet5 = new Set(up5);
+    const stars = { TIER_6: '★★★★★★', TIER_5: '★★★★★', TIER_4: '★★★★', TIER_3: '★★★' };
+    const byTier = { TIER_6: [], TIER_5: [], TIER_4: [], TIER_3: [] };
+    for (const c of this.characters.values()) {
+      if (!c.name || !byTier[c.rarity] || !this._isOperator(c)) continue;
+      byTier[c.rarity].push(c);
+    }
+    const pickTier = () => {
+      const r = Math.random();
+      if (r < 0.02) return 'TIER_6';
+      if (r < 0.1) return 'TIER_5';
+      if (r < 0.6) return 'TIER_4';
+      return 'TIER_3';
+    };
+    const pickChar = (tier) => {
+      let candidates = byTier[tier] || [];
+      const upSet = tier === 'TIER_6' ? upSet6 : tier === 'TIER_5' ? upSet5 : new Set();
+      if (upSet.size && Math.random() < 0.5) {
+        const ups = candidates.filter((c) => upSet.has(c.id));
+        if (ups.length) candidates = ups;
+      } else {
+        const nonUps = candidates.filter((c) => !upSet.has(c.id));
+        if (nonUps.length) candidates = nonUps;
+      }
+      if (!candidates.length) candidates = byTier[tier] || [];
+      const c = candidates[Math.floor(Math.random() * candidates.length)];
+      return { star: stars[tier], name: c?.name || '未知', up: c ? upSet.has(c.id) : false };
+    };
+    const results = [];
+    for (let i = 0; i < count; i++) {
+      const tier = pickTier();
+      const r = pickChar(tier);
+      results.push(`${r.star} ${r.name}${r.up ? ' ↑UP' : ''}`);
     }
     return results.join('\n');
   }
