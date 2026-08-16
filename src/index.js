@@ -10,6 +10,7 @@ import { Scheduler } from './scheduler.js';
 import { filterMessages as filterMessagesRaw } from './filter.js';
 import { tryCommand } from './commands.js';
 import { Analytics } from './analytics.js';
+import { DataRefresher } from './refresher.js';
 import { log, err } from './logger.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -37,9 +38,38 @@ const summarizer = new Summarizer(llm);
 const chatBot = new ChatBot(llm);
 const scheduler = new Scheduler(config.schedule || {});
 const analytics = new Analytics(path.join(dataDir, 'messages.db'), path.join(dataDir, 'messages'));
+const refresher = new DataRefresher(path.join(dataDir, 'ark'), config.dataRefresh || {});
 
 // 命令上下文（词典学习/干员查询/藏品查询/统计）
 const cmdCtx = { lingo: chatBot.lingo, arkdb: chatBot.arkdb, analytics };
+
+// 定期更新本地数据库（ArknightsGameData）
+async function refreshData(notifyGroupId = null) {
+  log('[refresh] 开始更新本地数据...');
+  const { updated, failed } = await refresher.refresh();
+  if (updated.length > 0) {
+    chatBot.arkdb.reload();
+    log('[refresh] 内存数据已重新加载');
+  }
+  const msg = `【数据更新】\n成功：${updated.length ? updated.join('、') : '无'}\n${failed.length ? '失败：' + failed.join('、') : '全部成功'}`;
+  if (notifyGroupId) {
+    client.sendGroupMsg(notifyGroupId, msg).catch((e) => err(`[refresh] 通知发送失败:`, e.message));
+  }
+  return msg;
+}
+
+{
+  const dr = config.dataRefresh || {};
+  if (dr.enabled !== false) {
+    const firstMs = (dr.firstDelayMinutes ?? 30) * 60 * 1000;
+    const intervalMs = (dr.intervalHours ?? 24) * 3600 * 1000;
+    setTimeout(() => {
+      refreshData().catch((e) => err('[refresh] 更新失败:', e.message));
+      setInterval(() => refreshData().catch((e) => err('[refresh] 更新失败:', e.message)), intervalMs);
+    }, firstMs);
+    log(`[refresh] 数据定期更新已启用：首次 ${dr.firstDelayMinutes ?? 30} 分钟后，此后每 ${dr.intervalHours ?? 24} 小时`);
+  }
+}
 
 const trackedGroups = () => (Array.isArray(config.groups) ? config.groups : []);
 const tracksGroup = (id) => trackedGroups().length === 0 || trackedGroups().includes(id);
@@ -295,6 +325,17 @@ client.onEvent((event) => {
     log(`[group ${event.group_id}] 收到仅@机器人（无内容）的消息`);
     const senderName = event.sender?.card || event.sender?.nickname || '群友';
     client.sendGroupMsg(event.group_id, `@${senderName} 艾特PRTS干什么呀喵`).catch((e) => err(`[group ${event.group_id}] 发送提示失败:`, e.message));
+    return;
+  }
+
+  // 手动刷新本地数据（联网更新 ArkgamesGameData）
+  if (/^(刷新数据|更新数据|更新数据库)$/.test(question)) {
+    log(`[group ${event.group_id}] 收到数据刷新指令`);
+    client.sendGroupMsg(event.group_id, '正在更新本地数据库，稍候…').catch(() => {});
+    refreshData(event.group_id).catch((e) => {
+      err('[refresh] 手动刷新失败:', e.message);
+      client.sendGroupMsg(event.group_id, `数据更新失败：${e.message}`).catch(() => {});
+    });
     return;
   }
 

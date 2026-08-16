@@ -52,6 +52,11 @@
   "backfill": {
     "maxHours": 72
   },
+  "dataRefresh": {
+    "enabled": true,
+    "intervalHours": 24,
+    "firstDelayMinutes": 30
+  },
   "filter": {
     "enabled": true
   },

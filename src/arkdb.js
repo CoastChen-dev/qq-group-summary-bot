@@ -17,6 +17,17 @@ export class ArkDB {
     this._loaded = false;
   }
 
+  // 清空内存缓存并重新加载（用于数据定期更新后）
+  reload() {
+    this.characters.clear();
+    this.handbooks.clear();
+    this.aliasMap.clear();
+    this.relics.clear();
+    this.gachaPools = [];
+    this._loaded = false;
+    this.load();
+  }
+
   load() {
     if (this._loaded) return;
     const charFile = path.join(this.dataDir, 'character_table.json');

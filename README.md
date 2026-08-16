@@ -47,6 +47,7 @@ src/
   cache.js      知识缓存（加速重复提问）
   commands.js   确定性任务指令（查干员/查藏品/抽卡/统计等）
   analytics.js  SQLite 消息分析层（活跃榜/群统计）
+  refresher.js  数据定期更新（ArknightsGameData 下载 + 热重载）
   scheduler.js  定时调度器
   filter.js     敏感内容过滤
   logger.js     日志
@@ -133,6 +134,7 @@ curl -o data/ark/gacha_table.json \
   - `hour`：日报发送时间（默认 9 点）
 - `quiet`：静默时段（默认 `enabled: true, start: 0, end: 8`，即 0:00-8:00 不响应总结；设 `enabled: false` 可关闭）
 - `backfill`：离线补偿（`maxHours` 默认 72，为 lastSeen 的兜底上限；实际从上次下线的 lastSeen 时刻开始补偿）
+- `dataRefresh`：数据定期更新（`enabled` 默认 true，`intervalHours` 默认 24，`firstDelayMinutes` 默认 30）
 - `filter`：敏感内容过滤（`enabled: true` 默认开启）
 - `commands.manualSummary`：手动触发概括的关键词（需 @机器人 且消息包含其中任一关键词）
 
@@ -158,6 +160,7 @@ Windows 下也可直接双击 `start_bot.bat`（后台运行，日志写入 `log
 - **词典学习**：`@机器人 学习 词=释义`（教新梗）、`@机器人 忘记 词`、`@机器人 查词 词`、`@机器人 词典`
 - **任务指令**：`查干员 X`、`查藏品 X`、`干员生日 X`、`今日生日`、`活跃榜 [N天]`、`群统计`
 - **真实卡池抽卡**：`卡池`（列出当前开放卡池及 UP 干员）、`十连 [池号/名称]`、`单抽 [池号/名称]`（基于游戏真实卡池数据与出率：6★2% 5★8% 4★50% 3★40%，UP 干员占其星级概率 50%）
+- **数据定期更新**：每 24 小时自动从 ArknightsGameData（jsDelivr 镜像）更新干员表/档案/藏品/卡池数据，原子写入 + 内存热重载；群内 `刷新数据` 可手动触发
 
 ## Windows 开机自启（可选）
 
