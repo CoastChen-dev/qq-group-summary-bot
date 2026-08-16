@@ -45,8 +45,8 @@ src/
 config.example.json  配置模板（脱敏，可提交仓库）
 config.json          实际配置（含密钥，已被 .gitignore 排除）
 start_bot.bat        Windows 快捷启动脚本
-bot.log              stdout 日志
-data/                运行数据（消息记录 + 概括进度 + 最后在线时间）
+logs/                日志（按天轮转，自动清理 14 天前）
+data/                运行数据（消息记录 + 概括进度 + 干员库 + 词典 + 最后在线时间）
 ```
 
 ## 快速开始
@@ -131,7 +131,7 @@ npm install
 npm start
 ```
 
-Windows 下也可直接双击 `start_bot.bat`（后台运行，日志写 `bot.log`）。
+Windows 下也可直接双击 `start_bot.bat`（后台运行，日志写入 `logs/` 目录，按天轮转）。
 
 > `config.json` 含敏感信息（API Key、token），已被 `.gitignore` 排除，不会提交到仓库；
 > 仓库中提供脱敏模板 `config.example.json`。
@@ -200,7 +200,7 @@ Register-ScheduledTask -TaskName "QQSummaryBot" -Action $action -Trigger $trigge
 
 - 停止机器人：`taskkill /f /pid <node 的 PID>`（在任务管理器或 `Get-Process node` 里查）
 - 重启：双击 `start_bot.bat`
-- 查看日志：`bot.log`（程序自身写入，不依赖重定向）
+- 查看日志：`logs/` 目录（按天轮转，如 `logs/2026-08-16.log`，自动清理 14 天前的日志）
 - NapCat 与 QQ 登录：用 NCD 管理，别直接用本机器人脚本去动 NapCat 配置
 - 数据文件：`data/messages/<群号>/<日期>.jsonl`（消息）、`data/state/lastSeen.json`（最后在线时间）
 
