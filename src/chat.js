@@ -157,7 +157,16 @@ export class ChatBot {
     let arkdbHit = null;
     if (this.arkdb) {
       this.arkdb.load();
-      const localHit = this.arkdb.findByName(extractKeywords(question)) || this.arkdb.searchBirthday(String(question));
+      const kw = extractKeywords(question);
+      let localHit = this.arkdb.findByName(kw) || this.arkdb.searchBirthday(String(question));
+      // 精确匹配失败时，尝试语义模糊匹配（bigram Dice）
+      if (!localHit) {
+        const fuzzy = this.arkdb.findOperatorFuzzy(kw);
+        if (fuzzy) {
+          localHit = fuzzy;
+          log(`[chat] 群 ${groupId} 语义模糊匹配到干员: ${fuzzy.name}`);
+        }
+      }
       if (localHit && (localHit.birthday || localHit.desc || localHit.gender)) {
         arkdbHit = localHit;
         arkdbContext = `【本地干员数据库】${localHit.name || ''}\n生日：${localHit.birthday || '未收录'}\n性别：${localHit.gender || ''}\n种族：${localHit.race || ''}\n身高：${localHit.height || ''}\n职业：${localHit.profession || ''}\n简介：${(localHit.desc || '').slice(0, 200)}`;
@@ -176,8 +185,16 @@ export class ChatBot {
       return this._reply(groupId, userName, question, arkdbContext, userId);
     }
 
-    // 肉鸽藏品查询：本地命中即秒回（含效果）
-    const relicObj = this.arkdb ? this.arkdb.findRelic(extractKeywords(question)) : null;
+    // 肉鸽藏品查询：本地命中即秒回（含效果），精确失败时语义模糊匹配
+    const relicKw = extractKeywords(question);
+    let relicObj = this.arkdb ? this.arkdb.findRelic(relicKw) : null;
+    if (!relicObj && this.arkdb) {
+      const fuzzy = this.arkdb.findRelicFuzzy(relicKw);
+      if (fuzzy) {
+        relicObj = fuzzy;
+        log(`[chat] 群 ${groupId} 语义模糊匹配到藏品: ${fuzzy.name}`);
+      }
+    }
     if (relicObj && relicObj.name && relicObj.usage) {
       log(`[chat] 群 ${groupId} 藏品查询命中本地数据库: ${relicObj.name}`);
       const relicCtx = `【本地肉鸽藏品库】${relicObj.name}\n效果：${relicObj.usage}\n描述：${relicObj.description || ''}`;

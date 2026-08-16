@@ -8,6 +8,8 @@ import { Summarizer } from './summarizer.js';
 import { ChatBot } from './chat.js';
 import { Scheduler } from './scheduler.js';
 import { filterMessages as filterMessagesRaw } from './filter.js';
+import { tryCommand } from './commands.js';
+import { Analytics } from './analytics.js';
 import { log, err } from './logger.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -34,6 +36,10 @@ const client = new NapCatClient(config.napcat.wsUrl, {
 const summarizer = new Summarizer(llm);
 const chatBot = new ChatBot(llm);
 const scheduler = new Scheduler(config.schedule || {});
+const analytics = new Analytics(path.join(dataDir, 'messages.db'), path.join(dataDir, 'messages'));
+
+// 命令上下文（词典学习/干员查询/藏品查询/统计）
+const cmdCtx = { lingo: chatBot.lingo, arkdb: chatBot.arkdb, analytics };
 
 const trackedGroups = () => (Array.isArray(config.groups) ? config.groups : []);
 const tracksGroup = (id) => trackedGroups().length === 0 || trackedGroups().includes(id);
@@ -168,7 +174,11 @@ async function backfillHistory() {
         if (t < sinceTs) continue;
         if (seen.has(m.message_id)) continue;
         seen.add(m.message_id);
-        if (store.addHistoryMessage(gid, m)) added++;
+        const rec = store.addHistoryMessage(gid, m);
+        if (rec) {
+          added++;
+          analytics.record(gid, rec);
+        }
         if (!earliest || t < earliest) earliest = t;
         if (t > latest) latest = t;
       }
@@ -259,6 +269,7 @@ client.onEvent((event) => {
 
   const rec = store.addMessage(event);
   if (!rec) return;
+  analytics.record(event.group_id, rec);
 
   const mentionedSelf = Array.isArray(event.message) &&
     event.message.some((seg) => seg?.type === 'at' && String(seg.data?.qq) === String(selfId));
@@ -284,6 +295,14 @@ client.onEvent((event) => {
     log(`[group ${event.group_id}] 收到仅@机器人（无内容）的消息`);
     const senderName = event.sender?.card || event.sender?.nickname || '群友';
     client.sendGroupMsg(event.group_id, `@${senderName} 艾特PRTS干什么呀喵`).catch((e) => err(`[group ${event.group_id}] 发送提示失败:`, e.message));
+    return;
+  }
+
+  // 确定性指令路由（词典学习/干员查询/藏品查询/统计等）
+  const cmdReply = tryCommand(cmdCtx, question);
+  if (cmdReply !== null) {
+    log(`[group ${event.group_id}] 指令响应: ${question.slice(0, 30)}`);
+    client.sendGroupMsg(event.group_id, cmdReply).catch((e) => err(`[group ${event.group_id}] 指令发送失败:`, e.message));
     return;
   }
 

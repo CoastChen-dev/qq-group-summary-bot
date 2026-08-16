@@ -165,6 +165,63 @@ export class ArkDB {
     return null;
   }
 
+  // ---- 语义模糊匹配（bigram Dice 系数，无外部依赖的轻量 embedding 替代）----
+  _bigrams(str) {
+    const s = String(str).replace(/[^\u4e00-\u9fffA-Za-z0-9]/g, '');
+    const set = new Set();
+    for (let i = 0; i < s.length - 1; i++) set.add(s.slice(i, i + 2));
+    return set;
+  }
+
+  _similarity(a, b) {
+    const A = this._bigrams(a);
+    const B = this._bigrams(b);
+    if (!A.size || !B.size) return 0;
+    let inter = 0;
+    for (const g of A) if (B.has(g)) inter++;
+    return (2 * inter) / (A.size + B.size);
+  }
+
+  // 语义模糊匹配干员名（如"波登克"→"波登可"）
+  findOperatorFuzzy(name, threshold = 0.38) {
+    if (!name) return null;
+    this.load();
+    const n = String(name).trim();
+    if (n.length <= 1) return null;
+    let best = null;
+    let bestScore = threshold;
+    for (const [key, cid] of this.aliasMap) {
+      if (key.length <= 1) continue;
+      if (Math.abs(key.length - n.length) > 4) continue;
+      const score = this._similarity(n, key);
+      if (score > bestScore) {
+        bestScore = score;
+        best = this.getById(cid);
+      }
+    }
+    return best;
+  }
+
+  // 语义模糊匹配藏品名（如"高卢的支票本"→"高卢银行支票"）
+  findRelicFuzzy(name, threshold = 0.38) {
+    if (!name) return null;
+    this.load();
+    const n = String(name).trim();
+    if (n.length <= 1) return null;
+    let best = null;
+    let bestScore = threshold;
+    for (const [key, r] of this.relics) {
+      if (key.length <= 1) continue;
+      if (Math.abs(key.length - n.length) > 4) continue;
+      const score = this._similarity(n, key);
+      if (score > bestScore) {
+        bestScore = score;
+        best = r;
+      }
+    }
+    return best;
+  }
+
   // 判断一段文本是否包含任何干员名/别名（≥2字），用于触发方舟检索
   containsOperatorName(text) {
     if (!text) return false;
@@ -194,5 +251,44 @@ export class ArkDB {
     const op = this.findByName(hit);
     if (!op) return null;
     return { name: op.name || hit, birthday: op.birthday || '' };
+  }
+
+  // 今日过生日的干员列表
+  todaysBirthdays(date = new Date()) {
+    this.load();
+    const m = date.getMonth() + 1;
+    const d = date.getDate();
+    const target = `${m}月${d}日`;
+    const list = [];
+    for (const [, profile] of this.handbooks) {
+      if (profile.birthday && profile.birthday === target) {
+        list.push(profile.name);
+      }
+    }
+    return [...new Set(list)];
+  }
+
+  // 权重抽卡（模拟明日方舟出率：6星2% 5星8% 4星50% 3星40%）
+  randomPull(n = 1) {
+    this.load();
+    const weights = { TIER_6: 0.02, TIER_5: 0.08, TIER_4: 0.5, TIER_3: 0.4 };
+    const stars = { TIER_6: '★★★★★★', TIER_5: '★★★★★', TIER_4: '★★★★', TIER_3: '★★★' };
+    const pool = [...this.characters.values()].filter((c) => c.name && weights[c.rarity]);
+    const pickOne = () => {
+      let r = Math.random();
+      for (const [tier, w] of Object.entries(weights)) {
+        if (r < w) return { tier, star: stars[tier] };
+        r -= w;
+      }
+      return { tier: 'TIER_3', star: stars.TIER_3 };
+    };
+    const results = [];
+    for (let i = 0; i < n; i++) {
+      const { tier, star } = pickOne();
+      const candidates = pool.filter((c) => c.rarity === tier);
+      const c = candidates[Math.floor(Math.random() * candidates.length)];
+      results.push(c ? `${star} ${c.name}` : `${star} （未知）`);
+    }
+    return results.join('\n');
   }
 }
