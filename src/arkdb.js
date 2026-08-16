@@ -39,6 +39,8 @@ export class ArkDB {
             nation: c.nation || '',
             team: c.team || '',
             groupId: c.groupId || '',
+            notObtainable: c.isNotObtainable === true,
+            spChar: c.isSpChar === true,
           });
           if (name) this.aliasMap.set(name, id);
           if (c.appellation) this.aliasMap.set(c.appellation, id);
@@ -286,7 +288,7 @@ export class ArkDB {
     this.load();
     const weights = { TIER_6: 0.02, TIER_5: 0.08, TIER_4: 0.5, TIER_3: 0.4 };
     const stars = { TIER_6: '★★★★★★', TIER_5: '★★★★★', TIER_4: '★★★★', TIER_3: '★★★' };
-    const pool = [...this.characters.values()].filter((c) => c.name && weights[c.rarity] && this._isOperator(c));
+    const pool = [...this.characters.values()].filter((c) => c.name && weights[c.rarity] && this._isOperator(c) && !c.spChar);
     const pickOne = () => {
       let r = Math.random();
       for (const [tier, w] of Object.entries(weights)) {
@@ -307,9 +309,10 @@ export class ArkDB {
 
   // ---- 真实卡池系统 ----
 
-  // 是否为可抽取的真实干员（排除召唤物 TOKEN / 陷阱 TRAP）
+  // 是否为可抽取的真实干员（排除召唤物 TOKEN / 陷阱 TRAP / 不可获取的预备干员）
   _isOperator(c) {
-    return ['MEDIC', 'WARRIOR', 'SPECIAL', 'SNIPER', 'SUPPORT', 'TANK', 'PIONEER', 'CASTER'].includes(c.profession);
+    return ['MEDIC', 'WARRIOR', 'SPECIAL', 'SNIPER', 'SUPPORT', 'TANK', 'PIONEER', 'CASTER'].includes(c.profession)
+      && !c.notObtainable;
   }
 
   // 当前开放的卡池
@@ -349,6 +352,8 @@ export class ArkDB {
     const byTier = { TIER_6: [], TIER_5: [], TIER_4: [], TIER_3: [] };
     for (const c of this.characters.values()) {
       if (!c.name || !byTier[c.rarity] || !this._isOperator(c)) continue;
+      // 异格/联动限定干员（isSpChar）仅在其 UP 卡池中可抽取
+      if (c.spChar && !upSet6.has(c.id) && !upSet5.has(c.id)) continue;
       byTier[c.rarity].push(c);
     }
     const pickTier = () => {
