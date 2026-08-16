@@ -11,6 +11,7 @@ import { filterMessages as filterMessagesRaw } from './filter.js';
 import { tryCommand } from './commands.js';
 import { Analytics } from './analytics.js';
 import { DataRefresher } from './refresher.js';
+import { WebUI } from './webui.js';
 import { log, err } from './logger.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -88,9 +89,11 @@ async function refreshData(notifyGroupId = null) {
   const msg = `【数据更新】\n成功：${updated.length ? updated.join('、') : '无'}\n未变化：${unchanged.length ? unchanged.join('、') : '无'}\n${failed.length ? '失败：' + failed.join('、') : '全部成功'}`;
   if (notifyGroupId) {
     client.sendGroupMsg(notifyGroupId, msg).catch((e) => err(`[refresh] 通知发送失败:`, e.message));
-    if (announce) client.sendGroupMsg(notifyGroupId, announce).catch(() => {});
-  } else if (announce && config.dataRefresh?.announce !== false) {
-    // 自动更新时向所有监控群播报新增内容
+    if (announce && config.dataRefresh?.announce === true) {
+      client.sendGroupMsg(notifyGroupId, announce).catch(() => {});
+    }
+  } else if (announce && config.dataRefresh?.announce === true) {
+    // 自动更新时向所有监控群播报新增内容（默认关闭，需 announce: true 显式开启）
     const targets = trackedGroups().length ? trackedGroups() : store.trackedGroupIds();
     for (const gid of targets) {
       client.sendGroupMsg(gid, announce).catch(() => {});
@@ -118,6 +121,9 @@ const tracksGroup = (id) => trackedGroups().length === 0 || trackedGroups().incl
 const minMessages = config.minMessages ?? 1;
 const includeSelf = config.includeSelf === true;
 const manualCmds = config.commands?.manualSummary ?? ['总结', '/总结', '#总结'];
+
+const startedAt = Date.now();
+let wsConnected = false;
 
 const report = config.report || {};
 const reportUserId = report.userId || 0;
@@ -319,6 +325,7 @@ client.onEvent((event) => {
   if (event.post_type === 'meta_event') {
     if (event.meta_event_type === 'lifecycle' && event.sub_type === 'connect') {
       ready = true;
+      wsConnected = true;
       (async () => {
         if (!selfId) {
           try {
@@ -415,4 +422,28 @@ for (const sig of ['SIGINT', 'SIGTERM']) {
 
 client.connect();
 scheduler.start(dailyReport);
+
+// Web 管理面板
+if (config.webui?.enabled !== false) {
+  const webui = new WebUI(config.webui || {});
+  webui.start({
+    getStatus: () => {
+      chatBot.arkdb.load();
+      return {
+        wsConnected,
+        selfId,
+        operators: chatBot.arkdb.characters.size,
+        relics: chatBot.arkdb.relics.size,
+        pools: chatBot.arkdb.gachaPools.length,
+        lingoCount: chatBot.lingo.size(),
+        messages: analytics.countMessages(),
+        uptime: `${Math.floor((Date.now() - startedAt) / 60000)} 分钟`,
+      };
+    },
+    getLingo: () => chatBot.lingo,
+    getConfig: () => config,
+    refreshData,
+  });
+}
+
 log('QQ 群聊概括机器人已启动（仅 @ 触发总结；每日 9:00 发送昨日日报）');

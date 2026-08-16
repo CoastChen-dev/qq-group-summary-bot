@@ -55,7 +55,14 @@
   "dataRefresh": {
     "enabled": true,
     "intervalHours": 24,
-    "firstDelayMinutes": 30
+    "firstDelayMinutes": 30,
+    "announce": false
+  },
+  "webui": {
+    "enabled": true,
+    "host": "127.0.0.1",
+    "port": 5210,
+    "token": ""
   },
   "filter": {
     "enabled": true

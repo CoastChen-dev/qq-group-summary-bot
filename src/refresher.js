@@ -16,10 +16,54 @@ export class DataRefresher {
     this.etagFile = path.join(dataDir, '.etags.json');
     this.etags = this._loadEtags();
     this.files = [
-      { name: 'character_table.json', desc: '干员表' },
-      { name: 'handbook_info_table.json', desc: '干员档案' },
-      { name: 'roguelike_topic_table.json', desc: '肉鸽藏品' },
-      { name: 'gacha_table.json', desc: '卡池表' },
+      {
+        name: 'character_table.json',
+        desc: '干员表',
+        validate: (buf) => {
+          const j = JSON.parse(buf.toString('utf8'));
+          const dict = j.characters || j;
+          let cnt = 0;
+          for (const v of Object.values(dict)) if (v && typeof v === 'object' && v.name) cnt++;
+          if (cnt < 500) throw new Error(`干员数量异常（${cnt} < 500）`);
+        },
+      },
+      {
+        name: 'handbook_info_table.json',
+        desc: '干员档案',
+        validate: (buf) => {
+          const j = JSON.parse(buf.toString('utf8'));
+          const n = Object.keys(j.handbookDict || {}).length;
+          if (n < 100) throw new Error(`档案数量异常（${n} < 100）`);
+        },
+      },
+      {
+        name: 'roguelike_topic_table.json',
+        desc: '肉鸽藏品',
+        validate: (buf) => {
+          const j = JSON.parse(buf.toString('utf8'));
+          let cnt = 0;
+          const walk = (o) => {
+            if (!o || typeof o !== 'object') return;
+            for (const v of Object.values(o)) {
+              if (v && typeof v === 'object') {
+                if (v.type === 'RELIC' && v.name) cnt++;
+                else walk(v);
+              }
+            }
+          };
+          walk(j);
+          if (cnt < 500) throw new Error(`藏品数量异常（${cnt} < 500）`);
+        },
+      },
+      {
+        name: 'gacha_table.json',
+        desc: '卡池表',
+        validate: (buf) => {
+          const j = JSON.parse(buf.toString('utf8'));
+          const n = (j.gachaPoolClient || []).length;
+          if (n < 10) throw new Error(`卡池数量异常（${n} < 10）`);
+        },
+      },
     ];
   }
 
@@ -65,7 +109,14 @@ export class DataRefresher {
         if (buf.length < 1024) throw new Error(`文件过小 (${buf.length}B)`);
         if (buf[0] !== 0x7b /* '{' */) throw new Error('内容不是 JSON 对象');
 
+        // 结构校验（防止上游数据损坏污染本地库）
+        if (file.validate) file.validate(buf);
+
+        // 原子替换：写临时文件 → 备份旧文件 → rename
         fs.writeFileSync(tmp, buf);
+        if (fs.existsSync(final)) {
+          try { fs.copyFileSync(final, `${final}.bak`); } catch { /* 备份失败不阻塞 */ }
+        }
         fs.renameSync(tmp, final);
         if (newEtag) this.etags[file.name] = newEtag;
         return { changed: true, size: buf.length };

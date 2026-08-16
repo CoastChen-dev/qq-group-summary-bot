@@ -91,6 +91,14 @@ export class Analytics {
     return `【最近 ${days} 天活跃榜】\n` + rows.map((r, i) => `${i + 1}. ${r.name}（${r.cnt} 条）`).join('\n');
   }
 
+  countMessages() {
+    try {
+      return this.db.prepare('SELECT COUNT(*) AS c FROM messages').get()?.c ?? 0;
+    } catch {
+      return 0;
+    }
+  }
+
   groupStats() {
     this._ensureImported();
     const rows = this.db.prepare(
