@@ -1,6 +1,7 @@
 import { log } from './logger.js';
 import { WikiRetriever, isArknightsRelated, extractKeywords } from './wiki.js';
 import { MoegirlRetriever } from './moegirl.js';
+import { WikipediaRetriever } from './wikipedia.js';
 import { LingoStore } from './lingo.js';
 import { KnowledgeCache } from './cache.js';
 import { ArkDB } from './arkdb.js';
@@ -60,6 +61,7 @@ export class ChatBot {
     this.defaultReply = cfg.defaultReply ?? '抱歉，我现在不方便回复，稍后再试试吧~';
     this.wiki = new WikiRetriever(cfg);
     this.moegirl = new MoegirlRetriever(cfg);
+    this.wikipedia = new WikipediaRetriever(cfg);
     this.lingo = new LingoStore(cfg.lingoFile);
     this.cache = new KnowledgeCache(cfg.cacheFile, { ttlHours: cfg.cacheTtlHours ?? 168 });
     this.arkdb = new ArkDB(cfg.arkdbDir);
@@ -209,6 +211,7 @@ export class ChatBot {
       new Promise((_, rej) => setTimeout(() => rej(new Error(`超时 ${ms}ms`)), ms)),
     ]);
 
+    // PRTS.Wiki 仅方舟相关问题检索
     if (isArk) {
       try {
         const r = await withTimeout(this.wiki.retrieve(question), 8000);
@@ -219,18 +222,32 @@ export class ChatBot {
       } catch (e) {
         log(`[chat] PRTS.Wiki 检索失败: ${e.message}`);
       }
+    } else {
+      log(`[chat] 群 ${groupId} 问题与方舟无关，跳过 PRTS.Wiki`);
+    }
 
+    // 萌娘百科作为通用知识源：无论是否方舟相关问题都尝试检索（覆盖 ACG/人物/作品/梗等）
+    try {
+      const m = await withTimeout(this.moegirl.retrieve(question), 10000);
+      if (m.context) {
+        scored.push({ source: 'moegirl', trustLabel: '萌娘百科', context: m.context, sources: m.sources, score: scoreResult('moegirl', { size: m.scoreSize || 0 }) });
+        log(`[chat] 群 ${groupId} 检索到萌娘百科: ${m.sources.join(', ')}`);
+      }
+    } catch (e) {
+      log(`[chat] 萌娘百科检索失败: ${e.message}`);
+    }
+
+    // 维基百科：非方舟问题时作为通用知识源（默认关闭，需 wikipediaEnabled: true；需要代理访问）
+    if (!isArk && this.wikipedia.enabled) {
       try {
-        const m = await withTimeout(this.moegirl.retrieve(question), 10000);
-        if (m.context) {
-          scored.push({ source: 'moegirl', trustLabel: '萌娘百科', context: m.context, sources: m.sources, score: scoreResult('moegirl', { size: m.scoreSize || 0 }) });
-          log(`[chat] 群 ${groupId} 检索到萌娘百科: ${m.sources.join(', ')}`);
+        const w = await withTimeout(this.wikipedia.retrieve(question), 10000);
+        if (w.context) {
+          scored.push({ source: 'wikipedia', trustLabel: '维基百科', context: w.context, sources: w.sources, score: scoreResult('moegirl', { size: w.context.length }) });
+          log(`[chat] 群 ${groupId} 检索到维基百科: ${w.sources.join(', ')}`);
         }
       } catch (e) {
-        log(`[chat] 萌娘百科检索失败: ${e.message}`);
+        log(`[chat] 维基百科检索失败: ${e.message}`);
       }
-    } else {
-      log(`[chat] 群 ${groupId} 问题与方舟无关，跳过知识库检索`);
     }
 
     // 本地词典作为最高可信度条目（不参与排序，始终第一）

@@ -30,7 +30,11 @@
     "cacheFile": "./data/knowledge_cache.json",
     "cacheTtlHours": 168,
     "arkdbDir": "./data/ark",
-    "chatConcurrency": 3
+    "chatConcurrency": 3,
+    "wikipediaEnabled": false,
+    "wikipediaApiUrl": "https://zh.wikipedia.org/w/api.php",
+    "wikipediaMaxCharPerPage": 2000,
+    "wikipediaTopK": 2
   },
   "minMessages": 5,
   "includeSelf": false,
