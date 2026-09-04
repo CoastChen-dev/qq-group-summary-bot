@@ -1,8 +1,26 @@
-import { log } from './logger.js';
+/*
+ * PRTS.Wiki 检索器（明日方舟攻略维基）：ChatBrain（plugins/chat.js）三级知识库中
+ * 「方舟话题」的联网检索层。
+ *
+ * 对外导出与复用：WikiRetriever 类（统一检索出口 retrieve），以及被 moegirl.js /
+ * wikipedia.js / chat.js 复用的两个纯函数 extractKeywords（问句剥语气词）、
+ * isArknightsRelated（方舟话题门）。类由 core/runtime.js 装配为知识共享单例
+ * （三个 Wiki 检索器同此，注入 ChatBrain）；config.llm 的 wikiEnabled/wikiTopK
+ * 等键经构造参数注入（注：键平铺在 llm 节下，无独立 wiki 节）。
+ * 读写数据：无本地读写；请求 https://prts.wiki/api.php 的 MediaWiki API，带最小间隔
+ * 节流、反爬冷却与 3 次重试（见 _waitForSlot/_get），单请求 12s 超时。
+ */
+import { log } from '../platform/logger.js';
 
 const API_URL = 'https://prts.wiki/api.php';
 const UA = 'PRTS-AI-Bot/1.0 (QQ Group Chat Bot; contact: local)';
 
+/**
+ * 从问句中提取检索核心词：剥掉标点与提问语气词（什么/怎么/哪里/多少/谁…）。
+ * 三个检索器与 chat.js 共用，保证「搜索词」口径一致。
+ * @param {string} question - 原始问句
+ * @returns {string} 清洗后的核心词；传入空值时返回空串（调用方需自行回退到原句）
+ */
 export function extractKeywords(question) {
   if (!question) return '';
   let text = String(question)
@@ -25,27 +43,32 @@ const ARK_KEYWORDS = [
   '德克萨斯', '推进之王', '斯卡蒂', '棘刺', '山', '水陈', '玛恩纳',
   '史尔特尔', '42', '泥岩', '煌', '夜莺', '白面鸮', '赛诺斯',
   '凯尔希', '陈', '诗怀雅', '凛冬', '守林人', '梅', '桃金娘',
-  '普瑞塞斯', '特蕾西娅', '博士', '源石病', '矿石病', '感染者', '整合运动',
-  '爱国者', '霜星', '塔露拉', '迷迭香', 'W', '凯尔西', '阿米娅',
+  '普瑞塞斯', '特蕾西娅', '源石病', '矿石病', '感染者', '整合运动',
+  '爱国者', '霜星', '塔露拉', '迷迭香', 'W', '凯尔西',
   '先锋', '近卫', '重装', '狙击', '术士', '医疗', '辅助', '特种',
   '部署', '费用', '攻速', '攻击力', '防御', '法抗', '模组', '专精',
   // 常用养成材料
   '芯片', '芯片组', '双芯片', '装置', '聚酸酯', '异铁', '酮凝集', '固源岩', '代糖', '酯原料', '铁', '酮', '糖',
-  '研磨石', '糖聚块', '提纯源岩', '聚合凝胶', '凝胶', '晶体元件', '晶体电路', '晶体电子单元', '聚合剂', '双极纳米片', 'D32钢', '扭转醇', '轻锰矿', '全新装置', '炽合金', 'RMA70', '白马醇', '酮阵列', '异铁块', '聚酸酯块', '提纯源岩',
+  '研磨石', '糖聚块', '提纯源岩', '聚合凝胶', '凝胶', '晶体元件', '晶体电路', '晶体电子单元', '聚合剂', '双极纳米片', 'D32钢', '扭转醇', '轻锰矿', '全新装置', '炽合金', 'RMA70', '白马醇', '酮阵列', '异铁块', '聚酸酯块',
   '龙门币', '作战记录', '基建材料', '招聘许可', '家具零件', '技巧概要', '技能书',
   // 常用敌人
-  '整合运动', '霜星', '爱国者', 'W', '弑君者', '浮士德', '梅菲斯特', '碎骨', '复仇者', '屠夫', '大鲍勃', '爱国者',
-  '蒸汽骑士', '特雷西斯', '血魔', '萨卡兹', '源石虫', '弩手', '术士', '掷矛手',
+  '弑君者', '浮士德', '梅菲斯特', '碎骨', '复仇者', '屠夫', '大鲍勃',
+  '蒸汽骑士', '特雷西斯', '血魔', '萨卡兹', '源石虫', '弩手', '掷矛手',
   // 玩法/系统
-  '剧情', '活动', '常驻关卡', '主线', '剿灭作战', '信赖', '潜能', '皮肤', '时装', '声优', '配音',
-  '危机合约', '合约赏金', '极限演习', '无脑挂机', '刷材料', '基建',
-  '企鹅物流', '整合', '罗德岛', '乌萨斯', '龙门', '维多利亚', '莱塔尼亚', '哥伦比亚',
-  '博士', '阿米娅', '陈', '凯尔希', '迷迭香', '闪灵', '夜莺', '塞雷娅',
-  '能天使', '银灰', '艾雅法拉', '煌', '棘刺', '水陈', '玛恩纳', '泥岩',
+  '剧情', '活动', '常驻关卡', '主线', '剿灭作战', '皮肤', '时装', '声优', '配音',
+  '合约赏金', '极限演习', '无脑挂机', '刷材料',
+  '企鹅物流', '整合', '乌萨斯', '维多利亚', '莱塔尼亚', '哥伦比亚',
+  '闪灵',
 ];
 
+// 关卡编号形态（如 1-7、S2-3、JT8-2），命中即视为方舟相关问题
 const STAGE_PATTERN = /(^|[^A-Za-z0-9])([A-Za-z]?-?[0-9]+-[0-9]+|[A-Za-z]{2,3}-?[0-9]{1,3})([^A-Za-z0-9]|$)/i;
 
+/**
+ * 方舟话题门：文本含 ARK_KEYWORDS 任一关键词，或形如关卡编号即判为方舟相关。
+ * @param {string} text - 待判文本
+ * @returns {boolean} 相关为 true；空输入恒 false（匹配大小写不敏感）
+ */
 export function isArknightsRelated(text) {
   if (!text) return false;
   const t = String(text).toLowerCase();
@@ -56,7 +79,22 @@ export function isArknightsRelated(text) {
   return false;
 }
 
+/**
+ * PRTS.Wiki 检索器：对单个问题执行「search → 取页 → 关键词定位截段」，输出可并入
+ * LLM 上下文的「【标题】正文…」片段（输出协议见 external-apis.md §3）。
+ * enabled=false（wikiEnabled）时检索类方法直接空转。
+ */
 export class WikiRetriever {
+  /**
+   * @param {Object} cfg - 配置（config.json 的 wiki.* 键，缺省用默认值）
+   * @param {boolean} [cfg.wikiEnabled=true] - 是否启用本检索器
+   * @param {string} [cfg.wikiApiUrl] - PRTS.Wiki 的 api.php 地址
+   * @param {number} [cfg.wikiMaxResults=5] - search 单次返回条数上限
+   * @param {number} [cfg.wikiMaxCharPerPage=4000] - 单页正文并入上限字符
+   * @param {number} [cfg.wikiTopK=3] - 并入 context 的页数上限
+   * @param {number} [cfg.wikiMinInterval=2000] - 相邻请求最小间隔 ms
+   * @param {number} [cfg.wikiCooldownMs=10000] - 疑似反爬后的冷却时长 ms
+   */
   constructor(cfg = {}) {
     this.enabled = cfg.wikiEnabled !== false;
     this.apiUrl = cfg.wikiApiUrl || API_URL;
@@ -72,6 +110,7 @@ export class WikiRetriever {
     this._consecutiveFail = 0;
   }
 
+  // 节流/冷却等待：距上次请求不足 _minInterval，或在反爬冷却期（_antiBotUntil）内则 sleep 到放行
   async _waitForSlot() {
     const now = Date.now();
     const waitUntil = Math.max(this._lastRequestAt + this._minInterval, this._antiBotUntil);
@@ -81,6 +120,9 @@ export class WikiRetriever {
     this._lastRequestAt = Date.now();
   }
 
+  // 带重试的 MediaWiki GET：单次 12s 超时；响应非 JSON（HTML=疑似反爬）计入
+  // _consecutiveFail，连续 ≥2 次进入 10s 冷却（_antiBotUntil）并写日志；间隔 1.5s
+  // 重试，3 次仍失败则抛最后一次错误
   async _get(params, retries = 3) {
     const full = { format: 'json', ...params };
     const qs = Object.entries(full)
@@ -117,6 +159,13 @@ export class WikiRetriever {
     throw lastErr || new Error('Wiki 请求失败');
   }
 
+  /**
+   * 搜索页面列表（内部再经 extractKeywords 清洗关键词）。
+   * 副作用: 更新 lastQuery；成功/失败均写 [wiki] 日志，失败不抛错。
+   * @param {string} title - 搜索词（原始问句亦可）
+   * @returns {Promise<Object[]>} [{title, snippet, size, wordcount}]；
+   *   空数组 = 未启用 / 空输入 / 请求失败
+   */
   async search(title) {
     if (!this.enabled || !title) return [];
     this.lastQuery = title;
@@ -143,6 +192,11 @@ export class WikiRetriever {
     }
   }
 
+  /**
+   * 拉取单页 wikitext 并清洗（_cleanWikitext），截断到 maxCharPerPage。
+   * @param {string} title - 页面标题
+   * @returns {Promise<string>} 清洗后的正文；空串 = 失败或空页（失败只记日志不抛）
+   */
   async getPageContent(title) {
     try {
       const data = await this._get({
@@ -160,6 +214,8 @@ export class WikiRetriever {
     }
   }
 
+  // wikitext 白名单清洗：删 <ref>/HTML 标签与无关模板，从信息模板中保留关键参数行
+  // （|名称=… 等），章节标题转 [标题] 行，最后压缩空行与多余空格
   _cleanWikitext(text) {
     if (!text) return '';
     let out = text;
@@ -194,6 +250,14 @@ export class WikiRetriever {
     return (extra ? extra + '\n' : '') + out.trim();
   }
 
+  /**
+   * 检索总入口：search → 前 topK 页各取正文；长页且含关键词时把截断窗口移到关键词
+   * 附近，拼成「【标题】正文…」context 返回（ChatBrain 将其并入 LLM 提示）。
+   * @param {string} question - 群内原始提问
+   * @returns {Promise<{context: string, sources: string[], scoreSize: number}>}
+   *   context='' 且 sources=[] 表示未启用或零命中（此时无 scoreSize 字段）；
+   *   有命中时 scoreSize = 各命中页 size（上游页面字节数）的最大值
+   */
   async retrieve(question) {
     if (!this.enabled) return { context: '', sources: [] };
 

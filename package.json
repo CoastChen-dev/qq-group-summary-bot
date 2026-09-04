@@ -6,10 +6,11 @@
   "type": "module",
   "main": "src/index.js",
   "engines": {
-    "node": ">=18"
+    "node": ">=22.5"
   },
   "scripts": {
-    "start": "node src/index.js"
+    "start": "node src/index.js",
+    "test": "node --test \"test/**/*.test.js\""
   },
   "dependencies": {
     "ws": "^8.18.0"

@@ -3,6 +3,8 @@
 基于 [NapCat](https://github.com/NapNeko/NapCatQQ) 的 OneBot 11 协议，通过正向 WebSocket 连接，
 实时接收群消息、本地持久化，并通过 LLM 生成群聊概括与每日日报。
 
+> 📚 **深入文档见 [`docs/`](docs/index.md)**：架构与消息路由、配置参考、数据格式、对外接口面、重构提案。
+
 ## 功能
 
 - 实时接收群消息并持久化到 `data/messages/<群号>/<日期>.jsonl`
@@ -22,7 +24,7 @@
 - **SQLite 分析层**（`data/messages.db`）：消息实时入库（JSONL 幂等导入），支持活跃榜、群统计等聚合查询
 - **知识缓存**：检索结果缓存到 `data/knowledge_cache.json`，同问题二次提问直接命中缓存（提速约 6 倍），缓存 TTL 可配置
 - **按可信度/热度排序**：多来源结果按来源可信度（词典>PRTS>萌娘）与热度（页面篇幅）综合评分排序，优先用最可能相关的资料
-- **每日 9:00** 自动统计昨日各群消息，将「昨日活跃群（≥100 条）日报」**私聊发送**给指定 QQ
+- **每日**（默认 9:00，可配 `report.hour/minute`）自动统计昨日各群消息，将「昨日活跃群（≥100 条）日报」**私聊发送**给指定 QQ
 - **静默时段**（默认 0:00-8:00）：不响应任何总结请求
 - **离线补偿**：每次启动时自动从**上次下线时刻**（持久化的最后在线时间）拉取错过的历史消息，重启/掉线也能补齐
 - **敏感内容过滤**：隐私信息（手机号/身份证/银行卡/邮箱/地址/IP/密码）和色情/暴力/违法等不当内容在送 LLM 前自动过滤，概括中不会出现
@@ -34,24 +36,22 @@
 
 ```
 src/
-  index.js      主入口（事件分发 + 定时任务编排）
-  napcat.js     OneBot 11 正向 WebSocket 客户端
-  store.js      消息存储 / 持久化 / 时段提取
-  summarizer.js LLM（OpenAI 兼容接口）概括器
-  chat.js       AI 群聊（带上下文记忆 + 三级知识库 + 本地干员库）
-  wiki.js       PRTS.Wiki 检索器（MediaWiki API）
-  moegirl.js    萌娘百科检索器（社区梗/黑话 + 通用 ACG 百科）
-  wikipedia.js  维基百科检索器（可选，通用知识源）
-  arkdb.js      本地干员数据库（干员信息/生日/档案 + 语义模糊匹配）
-  lingo.js      本地梗词典（可维护 + 群友纠错学习）
-  cache.js      知识缓存（加速重复提问）
-  commands.js   确定性任务指令（查干员/查藏品/抽卡/统计等）
-  analytics.js  SQLite 消息分析层（活跃榜/群统计/抽卡记录）
-  refresher.js  数据定期更新（ArknightsGameData 下载 + 校验 + 热重载）
-  webui.js      Web 管理面板（状态/词典/刷新/配置）
-  scheduler.js  定时调度器
-  filter.js     敏感内容过滤
-  logger.js     日志
+  index.js      引导入口（import { main }，按入口判定执行）
+  core/         主运行库：装配层（顶层）+ platform/(平台服务) + knowledge/(知识单例)（原 src/ 平铺模块迁入）
+    runtime.js    createApp(config, overrides) 纯装配 + start/stop 生命周期 + main()
+    registry.js   插件注册表（按优先级带分发消息 / hooks 起停插件）
+    routing.js    S1–S13 消息路由判定链 + 离线补偿（P5 自 runtime.js 拆出，装配期挂载）
+    platform/     napcat.js / store.js / summarizer.js / scheduler.js / analytics.js / refresher.js
+                  filter.js / logger.js / http.js
+    knowledge/    lingo.js / arkdb.js / cache.js / wiki.js / moegirl.js / wikipedia.js   知识服务共享单例
+  plugins/      功能插件（互不 import；服务一律经 createApp 注入）
+    lingo.js / ark.js / gacha.js / stats.js   确定性指令（原 commands.js 按领域拆）
+    summary.js / refresh.js / report.js   手动总结 / 数据刷新 / 每日日报（后台流程插件）
+    chat.js      AI 群聊（ChatBrain）+ LLM 兜底分发
+    webui.js     Web 管理面板（状态/词典/刷新/配置）
+test/           node:test 测试（npm test）
+  baseline/     行为基线（重构前直测 store/analytics/lingo/arkdb/commands 语义）
+  smoke/        import 面 / 注册表 / 插件接线 / 全链集成冒烟
 config.example.json  配置模板（脱敏，可提交仓库）
 config.json          实际配置（含密钥，已被 .gitignore 排除）
 start_bot.bat        Windows 快捷启动脚本
@@ -127,14 +127,13 @@ curl -o data/ark/gacha_table.json \
 > 仓库提供 `lingo.example.json` 词典模板（含常用干员绰号、方舟梗、知名 UP 主等 38 条），
 > 可复制到 `data/lingo.json` 使用。`data/` 目录已被 `.gitignore` 排除，你的本地词典不会误传。
 > 新增梗时向词典加一条 `"梗名": "解释"` 即可（重启 bot 生效）。
-- `schedule`：日报任务时间（`hour`/`minute`，默认 9:00）
 - `minMessages`：手动总结低于该消息条数时跳过
 - `report`：日报配置
   - `userId`：日报私聊接收人 QQ 号（**必填**）
   - `minMessages`：昨日消息数达到该值的群才生成日报（默认 100）
-  - `hour`：日报发送时间（默认 9 点）
+  - `hour` / `minute`：日报触发时刻（默认 `9` / `0`，即每天 9:00）
 - `quiet`：静默时段（默认 `enabled: true, start: 0, end: 8`，即 0:00-8:00 不响应总结；设 `enabled: false` 可关闭）
-- `backfill`：离线补偿（`maxHours` 默认 72，为 lastSeen 的兜底上限；实际从上次下线的 lastSeen 时刻开始补偿）
+- `backfill`：离线补偿（`maxHours` 默认 72，为**各群** lastSeen 的兜底上限；实际从该群上次下线的 lastSeen 时刻开始补，每群水位独立）
 - `dataRefresh`：数据定期更新（`enabled` 默认 true，`intervalHours` 默认 24，`firstDelayMinutes` 默认 30，`announce` 默认 false 关闭新增播报）
 - `webui`：Web 管理面板（`enabled` 默认 true，`host` 默认 127.0.0.1 仅本机，`port` 默认 5210，`token` 可选访问口令）
 - `filter`：敏感内容过滤（`enabled: true` 默认开启）
@@ -147,18 +146,20 @@ npm install
 npm start
 ```
 
+开发验证：`npm test`（node:test 全量——行为基线 + 冒烟，无第三方测试依赖）。
+
 Windows 下也可直接双击 `start_bot.bat`（后台运行，日志写入 `logs/` 目录，按天轮转）。
 
 > `config.json` 含敏感信息（API Key、token），已被 `.gitignore` 排除，不会提交到仓库；
 > 仓库中提供脱敏模板 `config.example.json`。
 
-看到 `QQ 群聊概括机器人已启动（仅 @ 触发总结；每日 9:00 发送昨日日报）` 即正常运行。
+看到类似 `QQ 群聊概括机器人已启动（仅 @ 触发总结；每日 9:00 发送昨日日报）` 的日志（时刻随 `report.hour/minute` 配置显示）即正常运行。
 
 ## 使用方式
 
 - **手动总结**：在群里发「@机器人 总结」（静默时段 0:00-8:00 内不响应）
 - **AI 群聊**：在群里 @机器人 直接说话（如「@机器人 你好」「@机器人 阿米娅是谁」），机器人以 AI 群友身份回复，能记住群内最近对话；涉及明日方舟的问题会自动检索 PRTS.Wiki 作为参考
-- **每日日报**：每天 9:00 自动把昨日活跃群（≥100 条消息）的概括私聊发给 `report.userId`
+- **每日日报**：每天（默认 9:00，可配 `report.hour/minute`）自动把昨日活跃群（≥100 条消息）的概括私聊发给 `report.userId`
 - **词典学习**：`@机器人 学习 词=释义`（教新梗）、`@机器人 忘记 词`、`@机器人 查词 词`、`@机器人 词典`
 - **任务指令**：`查干员 X`、`查藏品 X`、`干员生日 X`、`今日生日`、`活跃榜 [N天]`、`群统计`
 - **真实卡池抽卡**：`卡池`（列出当前开放卡池及 UP 干员）、`十连 [池号/名称]`、`单抽 [池号/名称]`（基于游戏真实卡池数据与出率：6★2% 5★8% 4★50% 3★40%，UP 干员占其星级概率 50%）、`抽卡记录 [N]`、`谁最欧`
@@ -224,7 +225,7 @@ Register-ScheduledTask -TaskName "QQSummaryBot" -Action $action -Trigger $trigge
 - 重启：双击 `start_bot.bat`
 - 查看日志：`logs/` 目录（按天轮转，如 `logs/2026-08-16.log`，自动清理 14 天前的日志）
 - NapCat 与 QQ 登录：用 NCD 管理，别直接用本机器人脚本去动 NapCat 配置
-- 数据文件：`data/messages/<群号>/<日期>.jsonl`（消息）、`data/state/lastSeen.json`（最后在线时间）
+- 数据文件：`data/messages/<群号>/<日期>.jsonl`（消息）、`data/state/lastSeen.json`（各群最后在线时间）
 
 ## 常见问题
 
@@ -239,4 +240,4 @@ Register-ScheduledTask -TaskName "QQSummaryBot" -Action $action -Trigger $trigge
 
 - 摘要内容由 LLM 生成，仅供群内成员参考，不作为事实依据。
 - 聊天记录保存在本地 `data/` 目录，请妥善保管，注意隐私。
-- 敏感内容过滤依赖内置关键词/正则规则（见 `src/filter.js`），请按需调整。
+- 敏感内容过滤依赖内置关键词/正则规则（见 `src/core/platform/filter.js`），请按需调整。
