@@ -135,10 +135,18 @@ export function seedMessages(dir, gid, dateStr, recs) {
  *   预备干员-近战 3★ WARRIOR isNotObtainable —— 不可获取，永不入池
  *   铁拳卫     3★ TRAP              —— profession 不在白名单，非干员
  *   生日测试员 3★ WARRIOR（档案生日 = 今天）   —— 「今日生日」恒命中
+ *   银灰       6★ PIONEER classicPotentialItemId —— 中坚干员：标准池/常驻不可出
+ *   年         6★ WARRIOR（pool_limited.limitParam.limitedCharId）—— 非异格限定：仅专属池可出
+ *   艾拉       6★ SPECIAL teamId=rainbow —— 联动干员：仅 LINKAGE 池可出
+ *   因陀罗     5★ PIONEER（recruitDetail 绿色高亮）—— 公开招募限定：不可寻访
+ *   断罪者     4★ WARRIOR itemObtainApproach=活动获得 —— 非寻访来源：不可抽
+ *   蛇屠箱     4★ TANK classicPotentialItemId —— 中坚 4★：不移出标准（两池皆可出）
  * 档案表：能天使(5月25日)/阿米娅/波登可/生日测试员(今天)。
  * 藏品表：高卢银行支票（嵌套在多层对象里）+ 策略之眼；夹一个非 RELIC 节点验证过滤。
  * 卡池表：池1「深池纪念」常开（UP：能天使/阿米娅）；池2「愚人号」常开（UP：归溟幽灵鲨）；
- *   池3「已关闭池」endTime 已过、池4「未来池」openTime 未到——验证 currentGachaPools 过滤。
+ *   池3「已关闭池」endTime 已过、池4「未来池」openTime 未到——验证 currentGachaPools 过滤；
+ *   池5-7「限定/中坚/联动纪念」均已关闭——验证真实寻访规则（限定专属/中坚归属/联动专属）。
+ * recruitDetail：绿色高亮段含因陀罗/火神——验证公开招募限定解析。
  * @param {string} dir - 临时数据根目录
  * @returns {string} data/ark 目录路径
  */
@@ -147,15 +155,22 @@ export function writeArkTables(dir) {
   fs.mkdirSync(arkDir, { recursive: true });
 
   const characters = {
-    'char_701_sp': { name: '归溟幽灵鲨', appellation: '归溟幽灵鲨', rarity: 'TIER_6', profession: 'SPECIAL', isSpChar: true, description: '<span>异格干员</span>' },
-    'char_141_night': { name: '能天使', appellation: '能天使', rarity: 'TIER_6', profession: 'SNIPER' },
-    'char_502_amiya': { name: '阿米娅', appellation: '阿米娅', rarity: 'TIER_5', profession: 'CASTER' },
-    'char_503_texas': { name: '德克萨斯', appellation: '德克萨斯', rarity: 'TIER_5', profession: 'PIONEER' },
-    'char_401_pod': { name: '波登可', appellation: '波登可', rarity: 'TIER_4', profession: 'MEDIC' },
-    'char_301_melan': { name: '玫兰莎', appellation: '玫兰莎', rarity: 'TIER_3', profession: 'WARRIOR' },
+    'char_701_sp': { name: '归溟幽灵鲨', appellation: '归溟幽灵鲨', rarity: 'TIER_6', profession: 'SPECIAL', isSpChar: true, description: '<span>异格干员</span>', itemObtainApproach: '招募寻访' },
+    'char_141_night': { name: '能天使', appellation: '能天使', rarity: 'TIER_6', profession: 'SNIPER', itemObtainApproach: '招募寻访' },
+    'char_502_amiya': { name: '阿米娅', appellation: '阿米娅', rarity: 'TIER_5', profession: 'CASTER', itemObtainApproach: '招募寻访' },
+    'char_503_texas': { name: '德克萨斯', appellation: '德克萨斯', rarity: 'TIER_5', profession: 'PIONEER', itemObtainApproach: '招募寻访' },
+    'char_401_pod': { name: '波登可', appellation: '波登可', rarity: 'TIER_4', profession: 'MEDIC', itemObtainApproach: '招募寻访' },
+    'char_301_melan': { name: '玫兰莎', appellation: '玫兰莎', rarity: 'TIER_3', profession: 'WARRIOR', itemObtainApproach: '招募寻访' },
     'char_prep_melee': { name: '预备干员-近战', appellation: '预备干员', rarity: 'TIER_3', profession: 'WARRIOR', isNotObtainable: true },
     'char_tok_fist': { name: '铁拳卫', appellation: '', rarity: 'TIER_3', profession: 'TRAP' },
-    'char_bday_today': { name: '生日测试员', appellation: '生日测试员', rarity: 'TIER_3', profession: 'WARRIOR' },
+    'char_bday_today': { name: '生日测试员', appellation: '生日测试员', rarity: 'TIER_3', profession: 'WARRIOR', itemObtainApproach: '招募寻访' },
+    // 真实寻访规则夹具（新规则覆盖用；插入顺序在既有干员之后，不扰动既有索引断言）：
+    'char_134_silver': { name: '银灰', appellation: '银灰', rarity: 'TIER_6', profession: 'PIONEER', itemObtainApproach: '招募寻访', classicPotentialItemId: 'class_p_char_134_silver' },
+    'char_2014_nian': { name: '年', appellation: '年', rarity: 'TIER_6', profession: 'WARRIOR', itemObtainApproach: '招募寻访' },
+    'char_4123_ela': { name: '艾拉', appellation: '艾拉', rarity: 'TIER_6', profession: 'SPECIAL', itemObtainApproach: '招募寻访', teamId: 'rainbow' },
+    'char_130_indra': { name: '因陀罗', appellation: '因陀罗', rarity: 'TIER_5', profession: 'PIONEER', itemObtainApproach: '招募寻访' },
+    'char_1013_conv': { name: '断罪者', appellation: '断罪者', rarity: 'TIER_4', profession: 'WARRIOR', itemObtainApproach: '活动获得' },
+    'char_150_snakek': { name: '蛇屠箱', appellation: '蛇屠箱', rarity: 'TIER_4', profession: 'TANK', itemObtainApproach: '招募寻访', classicPotentialItemId: 'class_p_char_150_snakek' },
   };
   fs.writeFileSync(path.join(arkDir, 'character_table.json'), JSON.stringify(characters));
 
@@ -208,8 +223,33 @@ export function writeArkTables(dir) {
     },
     { gachaPoolId: 'pool_closed', gachaPoolName: '已关闭池', endTime: 1000, dynMeta: {} },
     { gachaPoolId: 'pool_future', gachaPoolName: '未来池', openTime: 2_000_000_000, dynMeta: {} },
+    // 新规则覆盖用（均已关闭，不进 currentGachaPools，不扰动既有「当前卡池」断言）：
+    {
+      gachaPoolId: 'pool_limited',
+      gachaPoolName: '限定纪念',
+      gachaRuleType: 'LIMITED',
+      endTime: 1000,
+      limitParam: { limitedCharId: 'char_2014_nian' },
+      dynMeta: { main6RarityCharId: 'char_2014_nian' },
+    },
+    {
+      gachaPoolId: 'pool_classic',
+      gachaPoolName: '中坚纪念',
+      gachaRuleType: 'CLASSIC_DOUBLE',
+      endTime: 1000,
+      dynMeta: { main6RarityCharId: 'char_134_silver' },
+    },
+    {
+      gachaPoolId: 'pool_linkage',
+      gachaPoolName: '联动纪念',
+      gachaRuleType: 'LINKAGE',
+      endTime: 1000,
+      linkageParam: { guaranteeTarget6Char: 'char_4123_ela' },
+    },
   ];
-  fs.writeFileSync(path.join(arkDir, 'gacha_table.json'), JSON.stringify({ gachaPoolClient: gachaPools }));
+  // recruitDetail 绿色高亮段（<@rc.eml>）模拟「不可寻访但可公开招募」干员名单
+  const recruitDetail = '<@rc.eml>绿色高亮的不可寻访干员，可以在此招募</>\n<@rc.eml>因陀罗</> / <@rc.eml>火神</>';
+  fs.writeFileSync(path.join(arkDir, 'gacha_table.json'), JSON.stringify({ gachaPoolClient: gachaPools, recruitDetail }));
 
   return arkDir;
 }

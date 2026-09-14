@@ -2,17 +2,17 @@
  * Web 管理面板插件（P3c 由 src/webui.js 迁入并插件化：class WebUI 原样保留 + hooks 包装）。
  *
  * Web 管理面板：零依赖（node:http + 内联 HTML）的本地服务，提供运行状态、本地词典管理、
- * 手动数据刷新与脱敏配置查看；页面为 _html() 返回的内联模板字符串（模板文案/脚本勿动；
- * 唯一例外：坑 5 特批的 loadStatus「历史消息导入：进行中…」条件状态行，见 _html() 内注释）。
- * start(ctx) 注入契约 4 成员：{ getStatus(): Object, getLingo(): LingoStore, getConfig(): Object,
- * refreshData(): Promise<string> }——由 core/runtime.js 装配期把闭包注入 createWebUiPlugin(deps)。
+ * 用户记忆管理、手动数据刷新与脱敏配置查看；页面为 _html() 返回的内联模板字符串
+ *（模板文案/脚本按功能扩展维护——当前含坑 5 特批状态行与用户记忆卡片，见 _html() 内注释）。
+ * start(ctx) 注入契约 5 成员：{ getStatus(): Object, getLingo(): LingoStore, getMemory(): UserMemory|null,
+ * getConfig(): Object, refreshData(): Promise<string> }——由 core/runtime.js 装配期把闭包注入 createWebUiPlugin(deps)。
  *
  * 鉴权：_handle 入口由 _authorized 统一拦截（Authorization: Bearer <token> 或 URL ?token=；
  * token 为空则免鉴权）。脱敏：仅 /api/config 出口经 _maskedConfig（llm.apiKey 留首 6 尾 4 加
  * 省略号、napcat.accessToken 置 ***）。路由表：GET /、/index.html → 页面；GET /api/status →
- * 状态快照；GET /api/lingo → 词条列表；POST /api/lingo → 学词/删词；POST /api/refresh →
- * 手动刷新（共用 §6.3 refresh runner）；GET /api/config → 脱敏配置；其余 404；_handle 抛错
- * 由 start 内联 catch 兜成 500 JSON。
+ * 状态快照；GET /api/lingo → 词条列表；POST /api/lingo → 学词/删词；GET /api/memory → 用户记忆
+ * 快照；POST /api/memory → 删除单条事实/整人记忆；POST /api/refresh → 手动刷新（共用 §6.3
+ * refresh runner）；GET /api/config → 脱敏配置；其余 404；_handle 抛错由 start 内联 catch 兜成 500 JSON。
  *
  * 消息面：无（仅 hooks 插件——handleMessage 恒 null；priority 0 不占分发带，同 report）。
  * hooks.start → cfg.enabled !== false 时 new WebUI 并 listen（原 runtime.start 末段）；
@@ -45,9 +45,10 @@ export class WebUI {
   /**
    * 注入上下文并启动 HTTP 服务（立即 listen；端口占用等启动失败由 node:http 抛错冒泡给调用方）。
    *
-   * @param {Object} ctx - 注入契约 4 成员（见文件头）
+   * @param {Object} ctx - 注入契约 5 成员（见文件头）
    * @param {Function} ctx.getStatus - () => Object，状态快照（/api/status）
    * @param {Function} ctx.getLingo - () => LingoStore，词典实例（/api/lingo 读写）
+   * @param {Function} ctx.getMemory - () => UserMemory|null，用户记忆实例（/api/memory 读写；禁用时为 null）
    * @param {Function} ctx.getConfig - () => Object，原始配置对象（脱敏在出口 _maskedConfig 做）
    * @param {Function} ctx.refreshData - () => Promise<string>，数据刷新编排（runtime.refreshData，桥接 refresh 插件 api.refresh）
    * 副作用：监听端口；处理器抛错内联兜成 500 JSON 响应
@@ -148,6 +149,25 @@ export class WebUI {
       }
     }
 
+    // 用户记忆：GET 全量快照；POST {action:'deleteFact'|'deleteUser', groupId, userId, index?}
+    if (p === '/api/memory') {
+      const mem = this.ctx.getMemory ? this.ctx.getMemory() : null;
+      if (!mem) return this._json(res, { users: [] });
+      if (m === 'GET') {
+        return this._json(res, { users: mem.dump() });
+      }
+      if (m === 'POST') {
+        const body = await this._body(req);
+        if (body.action === 'deleteUser') {
+          return this._json(res, { ok: mem.forgetUser(body.groupId, body.userId) });
+        }
+        if (body.action === 'deleteFact') {
+          return this._json(res, { ok: mem.removeFact(body.groupId, body.userId, Number(body.index)) });
+        }
+        return this._json(res, { ok: false, error: '未知 action' });
+      }
+    }
+
     // 手动刷新（触发源：WebUI；与启动定时器/群指令 S11 共用 §6.3 refresh runner，此处不传群号）
     if (p === '/api/refresh' && m === 'POST') {
       const result = await this.ctx.refreshData();
@@ -221,6 +241,11 @@ export class WebUI {
   </div>
 
   <div class="card">
+    <h2>用户记忆管理 <span class="muted" id="memCount"></span></h2>
+    <table><thead><tr><th>群号</th><th>用户</th><th>记忆</th><th style="width:60px;"></th></tr></thead><tbody id="memTbody"></tbody></table>
+  </div>
+
+  <div class="card">
     <h2>当前配置（密钥已脱敏）</h2>
     <pre id="configView">加载中…</pre>
   </div>
@@ -247,6 +272,7 @@ async function loadStatus() {
     // 属模板改动，仅此一处获准（见文件头注释）
     ...(s.importingHistory ? [stat('历史消息导入', '进行中…')] : []),
     stat('词典数', s.lingoCount),
+    stat('记忆数', s.memoryFacts),
     stat('运行时长', s.uptime),
   ].join('');
 }
@@ -272,6 +298,26 @@ async function delLingo(term) {
   toast('已删除：' + term);
   loadLingo();
 }
+async function loadMemory() {
+  const d = await api('/api/memory');
+  const total = d.users.reduce((n, u) => n + u.facts.length, 0);
+  $('memCount').textContent = '（' + d.users.length + ' 人 / ' + total + ' 条）';
+  $('memTbody').innerHTML = d.users.map((u) =>
+    '<tr><td>' + esc(u.groupId) + '</td><td>' + esc(u.name || u.userId) + '</td><td>' +
+    u.facts.map((f, i) => esc(f.text) + ' <a href="#" onclick="delFact(\\'' + esc(u.groupId) + '\\',\\'' + esc(u.userId) + '\\',' + i + ');return false;" class="muted">×</a>').join('<br>') +
+    '</td><td><button class="danger" onclick="delMemUser(\\'' + esc(u.groupId) + '\\',\\'' + esc(u.userId) + '\\')">清空</button></td></tr>'
+  ).join('');
+}
+async function delFact(gid, uid, index) {
+  await api('/api/memory', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'deleteFact', groupId: gid, userId: uid, index }) });
+  toast('已删除一条记忆');
+  loadMemory();
+}
+async function delMemUser(gid, uid) {
+  await api('/api/memory', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'deleteUser', groupId: gid, userId: uid }) });
+  toast('已清空该用户记忆');
+  loadMemory();
+}
 async function doRefresh() {
   $('refreshNote').textContent = '更新中…';
   try {
@@ -287,7 +333,7 @@ async function loadConfig() {
   const c = await api('/api/config');
   $('configView').textContent = JSON.stringify(c, null, 2);
 }
-loadStatus(); loadLingo(); loadConfig();
+loadStatus(); loadLingo(); loadMemory(); loadConfig();
 setInterval(loadStatus, 10000);
 </script>
 </body>
@@ -301,8 +347,8 @@ setInterval(loadStatus, 10000);
  * hooks.stop 关停（原实现无停服路径、依赖 process.exit——插件化后补上，属无害增强）。
  * @param {Object} deps - runtime 装配期注入
  * @param {Object} deps.cfg - config.webui 子集（{port?, host?, token?, enabled?}；enabled 缺省视为开）
- * @param {Object} deps.startCtx - start(ctx) 注入契约 4 成员（见 class WebUI JSDoc）——
- *   getStatus/getLingo/getConfig/refreshData 均为 runtime 闭包
+ * @param {Object} deps.startCtx - start(ctx) 注入契约 5 成员（见 class WebUI JSDoc）——
+ *   getStatus/getLingo/getMemory/getConfig/refreshData 均为 runtime 闭包
  * @returns {Object} 注册表可直接 register 的插件描述符
  */
 export function createWebUiPlugin(deps) {

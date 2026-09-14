@@ -104,6 +104,7 @@ function mkApp(cfgOverrides = {}, svcOverrides = {}) {
     refresher, lingo, arkdb: { snapshotHighOps: () => [], snapshotGachaPools: () => [], reload: () => {} },
     cache: { get: () => null, set: () => {}, hit: () => {}, deleteByPrefix: () => 0 },
     wiki: {}, moegirl: {}, wikipedia: {},
+    memory: { listFacts: () => [], setFact: () => ({ ok: true }), forgetUser: () => false, findByMention: () => [], dump: () => [], countUsers: () => 0, countFacts: () => 0 },
     brain,
     ...svcOverrides,
   });
@@ -111,10 +112,10 @@ function mkApp(cfgOverrides = {}, svcOverrides = {}) {
 }
 
 describe('createApp 全链（P3 五插件装配面）', () => {
-  it('分发带全量注册且次序 = summary→refresh→lingo→ark→gacha→stats→chat→(hooks)report/webui', () => {
+  it('分发带全量注册且次序 = summary→refresh→memory→lingo→ark→gacha→stats→chat→(hooks)report/webui', () => {
     const { app } = mkApp();
     const names = app.services.registry.sorted().map((p) => p.name);
-    assert.deepEqual(names, ['summary', 'refresh', 'lingo', 'ark', 'gacha', 'stats', 'chat', 'report', 'webui']);
+    assert.deepEqual(names, ['summary', 'refresh', 'memory', 'lingo', 'ark', 'gacha', 'stats', 'chat', 'report', 'webui']);
   });
 
   it('chat 兜底：指令全落空文本最终到 brain.chat（原 S13），回复经 client 群发', async () => {
@@ -154,7 +155,7 @@ describe('createApp 全链（P3 五插件装配面）', () => {
   it('S10 纯 @（空问题）：固定提示回复不受插件化影响', async () => {
     const { send, sent } = mkApp();
     send(atEvent(''));
-    assert.deepEqual(sent, [{ gid: 9, msg: '@博士 艾特PRTS干什么呀喵' }]);
+    assert.deepEqual(sent, [{ gid: 9, msg: '@博士 艾特Mon3tr干什么呀喵' }]);
   });
 
   it('紧贴 @ 无空格的整串不触发任何插件：落 S10 空@ 提示（2026-09 决策，见 architecture §8 坑 11）', async () => {
@@ -173,7 +174,7 @@ describe('createApp 全链（P3 五插件装配面）', () => {
         { type: 'text', data: { text: '总结' } }, // 无前导空格：紧贴 at 段
       ],
     });
-    assert.deepEqual(sent, [{ gid: 9, msg: '@博士 艾特PRTS干什么呀喵' }]);
+    assert.deepEqual(sent, [{ gid: 9, msg: '@博士 艾特Mon3tr干什么呀喵' }]);
     assert.equal(calls.summarize, 0); // 不回显总结
     assert.equal(calls.brainChat, null);
   });

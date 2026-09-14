@@ -18,6 +18,7 @@ import { log } from './platform/logger.js';
 export const PRIORITY = Object.freeze({
   summary: 900, // 手动总结关键词（S8）——路由链最前的产品行为
   refresh: 800, // 数据刷新指令（S11）
+  memory: 750,  // 用户记忆（记住/我的记忆/忘记我）
   lingo: 700,   // 词典学习/维护（commands 规则 1-4）
   ark: 600,     // 干员/藏品/生日查询（规则 5-8）
   gacha: 500,   // 卡池/抽卡/抽卡记录（规则 9-11，含顺序敏感正则）

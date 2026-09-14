@@ -29,6 +29,7 @@ import { Scheduler } from './platform/scheduler.js';
 import { filterMessages as filterMessagesRaw } from './platform/filter.js';
 import { Analytics } from './platform/analytics.js';
 import { DataRefresher } from './platform/refresher.js';
+import { UserMemory } from './platform/usermem.js';
 import { LingoStore } from './knowledge/lingo.js';
 import { ArkDB } from './knowledge/arkdb.js';
 import { KnowledgeCache } from './knowledge/cache.js';
@@ -85,6 +86,19 @@ export function createApp(config, overrides = {}) {
   const analytics = overrides.analytics || new Analytics(path.join(dataDir, 'messages.db'), path.join(dataDir, 'messages'));
   const refresher = overrides.refresher || new DataRefresher(path.join(dataDir, 'ark'), config.dataRefresh || {});
 
+  // 用户记忆（config.memory.*；enabled=false 时不建——记忆指令回「记忆功能未启用」、
+  // chat 不注入不提取）。文件路径相对项目根解析（与 lingo/cache 的 ./data/... 语义一致）
+  const memoryCfg = config.memory || {};
+  const memoryFile = memoryCfg.file
+    ? (path.isAbsolute(memoryCfg.file) ? memoryCfg.file : path.resolve(root, memoryCfg.file))
+    : path.join(dataDir, 'user_memory.json');
+  const memory = overrides.memory || (memoryCfg.enabled !== false
+    ? new UserMemory(memoryFile, {
+        maxPerUser: memoryCfg.maxFactsPerUser ?? 20,
+        maxGlobal: memoryCfg.maxFactsGlobal ?? 2000,
+      })
+    : null);
+
   // 检索与知识服务上移为共享单例（P3，refactor-proposal「服务上移」）：原 ChatBot 构造内 new 的
   // lingo/arkdb/cache 与三检索器改在此装配——注入 ChatBrain（字段引用同旧，chat() 正文零改动），
   // 同时供指令插件 ctx（S12）与 getStatus/refreshData/WebUI 借用同一实例（事实共享单例语义不变）
@@ -94,7 +108,7 @@ export function createApp(config, overrides = {}) {
   const wiki = overrides.wiki || new WikiRetriever(llm);
   const moegirl = overrides.moegirl || new MoegirlRetriever(llm);
   const wikipedia = overrides.wikipedia || new WikipediaRetriever(llm);
-  const brain = overrides.brain || new ChatBrain({ cfg: llm, lingo, arkdb, cache, wiki, moegirl, wikipedia });
+  const brain = overrides.brain || new ChatBrain({ cfg: llm, lingo, arkdb, cache, wiki, moegirl, wikipedia, usermem: memory, memoryCfg });
 
   // 群路由相关配置常量（自 config.json 派生；groups 空数组 = 跟踪全部群）
   const trackedGroups = () => (Array.isArray(config.groups) ? config.groups : []);
@@ -132,7 +146,7 @@ export function createApp(config, overrides = {}) {
   // 注册创建（report 插件注册参数 getAllGroupIds 取之）；state 对象由装配段构造，路由与插件
   // 注册段（isReady 闭包）读写同一份
   const routing = createRouting({
-    store, analytics, client, registry, lingo, arkdb, state,
+    store, analytics, client, registry, lingo, arkdb, memory, state,
     includeSelf, tracksGroup, trackedGroups,
     quietEnabled, quietStart, quietEnd,
     backfillMaxHours: config.backfill?.maxHours ?? 72,
@@ -157,7 +171,7 @@ export function createApp(config, overrides = {}) {
   const chatPlugin = createChatPlugin({ brain, client });
   const webuiPlugin = createWebUiPlugin({
     cfg: config.webui || {},
-    startCtx: { getStatus, getLingo: () => lingo, getConfig: () => config, refreshData },
+    startCtx: { getStatus, getLingo: () => lingo, getMemory: () => memory, getConfig: () => config, refreshData },
   });
   for (const p of [commandPlugins, summaryPlugin, refreshPlugin, reportPlugin, chatPlugin, webuiPlugin].flat()) registry.register(p);
 
@@ -193,6 +207,7 @@ export function createApp(config, overrides = {}) {
       relics: arkdb.relics.size,
       pools: arkdb.gachaPools.length,
       lingoCount: lingo.size(),
+      memoryFacts: memory ? memory.countFacts() : 0,
       messages: analytics.countMessages(),
       // 坑 5 修复：历史 JSONL 后台导入是否进行中（WebUI 据此显示「历史消息导入：进行中…」）
       importingHistory: analytics.importState === 'running',
@@ -242,7 +257,7 @@ export function createApp(config, overrides = {}) {
 
   return {
     config,
-    services: { dataDir, llm, store, client, summarizer, brain, lingo, arkdb, cache, wiki, moegirl, wikipedia, scheduler, analytics, refresher, registry },
+    services: { dataDir, llm, store, client, summarizer, brain, lingo, arkdb, cache, wiki, moegirl, wikipedia, memory, scheduler, analytics, refresher, registry },
     refreshData,
     getStatus,
     start,

@@ -21,7 +21,7 @@ import { fmtFull } from './platform/store.js';
  * 除下方 @param 列出的注入点与 state 对象化外，判定顺序与文案一字未改。
  *
  * @param {Object} options - runtime 装配段已构造的依赖与派生配置：
- *   store/analytics/client/registry/lingo/arkdb 服务句柄（S5 入库、S12 dispatch ctx 等）；
+ *   store/analytics/client/registry/lingo/arkdb/memory 服务句柄（S5 入库、S12 dispatch ctx 等）；
  *   state 共享可变对象 { selfId, ready, backfillDone, wsConnected }（S1/S3/backfill 读写，
  *   runtime 侧 isReady/getStatus 读同一对象）；includeSelf（S3 机器人自身消息）、
  *   tracksGroup（S4 群白名单判定）、trackedGroups（backfill 群集合，空数组 = 全部群）、
@@ -32,7 +32,7 @@ import { fmtFull } from './platform/store.js';
  */
 export function createRouting(options) {
   const {
-    store, analytics, client, registry, lingo, arkdb, state,
+    store, analytics, client, registry, lingo, arkdb, memory, state,
     includeSelf, tracksGroup, trackedGroups,
     quietEnabled, quietStart, quietEnd, backfillMaxHours,
   } = options;
@@ -202,11 +202,11 @@ export function createRouting(options) {
     // 最先的插件认领并异步触发概括，路由此处不再单独判定（见 plugins/summary.js）。
     // S9 剥前导 @ 得到问题文本
     const question = extractQuestion(rec, true);
-    // S10 纯 @（问题为空）：回「@昵称 艾特PRTS干什么呀喵」提示并 return
+    // S10 纯 @（问题为空）：回「@昵称 艾特Mon3tr干什么呀喵」提示并 return
     if (!question) {
       log(`[group ${event.group_id}] 收到仅@机器人（无内容）的消息`);
       const senderName = event.sender?.card || event.sender?.nickname || '群友';
-      client.sendGroupMsg(event.group_id, `@${senderName} 艾特PRTS干什么呀喵`).catch((e) => err(`[group ${event.group_id}] 发送提示失败:`, e.message));
+      client.sendGroupMsg(event.group_id, `@${senderName} 艾特Mon3tr干什么呀喵`).catch((e) => err(`[group ${event.group_id}] 发送提示失败:`, e.message));
       return;
     }
 
@@ -221,6 +221,7 @@ export function createRouting(options) {
     const cmdReply = registry.dispatch({
       lingo: lingo,
       arkdb: arkdb,
+      memory,
       analytics,
       groupId: event.group_id,
       userId: event.user_id,

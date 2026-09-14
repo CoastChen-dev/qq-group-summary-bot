@@ -32,7 +32,7 @@ Authorization: Bearer {apiKey}
 
 | 维度 | Summarizer（概括/日报） | ChatBrain（群聊，plugins/chat.js） |
 |---|---|---|
-| 请求形状 | system=「严谨简洁的群聊分析助手」+ user=完整结构化 prompt | system=长人设提示（PRTS + 群聊规则 + 匿名机制 + 知识上下文段） |
+| 请求形状 | system=「严谨简洁的群聊分析助手」+ user=完整结构化 prompt | system=长人设提示（Mon3tr + 群聊规则 + 实名上下文/用户记忆 + 知识上下文段） |
 | temperature | 0.7 | 0.8 |
 | max_tokens 默认 | 2048 | 1024 |
 | 并发限制 | 无 | 信号量 3（llm.chatConcurrency） |
@@ -67,6 +67,9 @@ Authorization: Bearer {apiKey}
 - 原子写入：`.tmp` → 旧文件备份 `.bak` → rename；90s 请求超时。
 - 上游数据结构约定（ArkDB 消费面）：character_table（`.characters` 或扁平）、handbook `.handbookDict`、藏品递归找 `type==='RELIC'`、卡池 `.gachaPoolClient`。
 
-## 5. 匿名机制（plugins/chat.js ChatBrain 内部约定）
+## 5. 实名上下文与用户记忆（plugins/chat.js ChatBrain 内部约定）
 
-群上下文与 LLM prompt 中不出现真实昵称：`_speakerLabel` 按群维护「昵称/QQ → 群友N」映射（每群上限 200，先到先得，满了才逐出）；system prompt 明确告知模型「群友N 是匿名代号」。该状态只存内存、不落盘、重启即清。
+- **实名上下文**：对话历史与当前提问以群昵称（群名片优先）为前缀（`张三：...`），`_displayName` 按群维护「QQ → 最近昵称」映射（每群上限 200，满了逐出最旧）；system prompt 允许模型自然地称呼群友、理解「他/她/刚才那位」指代。**QQ 号绝不进 prompt**（仅作内部键）。该成员映射只存内存、不落盘、重启即清。
+- **用户记忆注入**：`buildMessages` 经 `_memoryContext` 注入【用户记忆】段——提问者本人的事实 + 问题中点名的其他成员的事实（昵称精确匹配，按群隔离；见 core/platform/usermem.js）。
+- **自动提取**：`_reply` 成功后 fire-and-forget 调 `_extractMemory`——同一 LLM 端点、`temperature 0.2`、`max_tokens 200`、30s 超时 ×1 重试，要求模型只输出 JSON 字符串数组（≤3 条，每条 ≤30 字）；`_parseFacts` 容错解析（允许 markdown 包裹），失败只记日志不影响回复。问题 <4 字跳过；`config.memory.autoExtract=false` 或 `enabled=false` 时关闭。
+- **容量**：每人 20 条 / 全局 2000 条（config.memory 可调），超限丢最旧；事实写盘于 data/user_memory.json（见 data-format.md §6）。

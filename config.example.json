@@ -55,6 +55,13 @@
     "firstDelayMinutes": 30,
     "announce": false
   },
+  "memory": {
+    "enabled": true,
+    "file": "./data/user_memory.json",
+    "autoExtract": true,
+    "maxFactsPerUser": 20,
+    "maxFactsGlobal": 2000
+  },
   "webui": {
     "enabled": true,
     "host": "127.0.0.1",

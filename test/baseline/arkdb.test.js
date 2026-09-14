@@ -34,12 +34,12 @@ describe('ArkDB 加载', () => {
   it('四表懒加载：计数正确、_loaded 幂等', (t) => {
     const { ark } = makeArk(t);
     ark.load();
-    assert.equal(ark.characters.size, 9);
+    assert.equal(ark.characters.size, 15);
     assert.equal(ark.handbooks.size, 4);
     assert.equal(ark.relics.size, 2); // 非 RELIC 节点被递归过滤掉
-    assert.equal(ark.gachaPools.length, 4); // 含已关闭/未开放的池（过滤属查询层职责）
+    assert.equal(ark.gachaPools.length, 7); // 含已关闭/未开放的池（过滤属查询层职责）
     ark.load(); // 二次 load 不重复
-    assert.equal(ark.characters.size, 9);
+    assert.equal(ark.characters.size, 15);
   });
 
   it('数据目录缺文件/为空：不抛错、空表可用、查询返回 null', (t) => {
@@ -53,7 +53,7 @@ describe('ArkDB 加载', () => {
   it('reload() 热重载：文件更新后重读，旧表清空', (t) => {
     const { dir, ark } = makeArk(t);
     ark.load(); // characters/gachaPools 等表惰性填充：读字段前先 load（与 commands 运行路径一致）
-    assert.equal(ark.characters.size, 9);
+    assert.equal(ark.characters.size, 15);
 
     const charFile = path.join(dir, 'data', 'ark', 'character_table.json');
     const table = JSON.parse(fs.readFileSync(charFile, 'utf8'));
@@ -61,7 +61,7 @@ describe('ArkDB 加载', () => {
     fs.writeFileSync(charFile, JSON.stringify(table));
 
     ark.reload();
-    assert.equal(ark.characters.size, 10);
+    assert.equal(ark.characters.size, 16);
     assert.equal(ark.findByName('新干员').rarity, 'TIER_5');
   });
 });
@@ -216,6 +216,61 @@ describe('抽卡引擎', () => {
     const pool1 = ark.gachaPools.find((p) => p.gachaPoolId === 'pool_open_1');
     const got = withRand([0.01, 0.99, 0.99], () => ark.pullFromPool(pool1, 1)[0]);
     assert.equal(got.name, '能天使');
+  });
+
+  it('randomPull：真实寻访规则排除（中坚 6★/限定/联动/非寻访来源/招募限定），中坚 4★ 仍可出', (t) => {
+    const { ark } = makeArk(t);
+    const names = new Set();
+    for (let i = 0; i < 300; i++) {
+      for (const r of ark.randomPull(10)) names.add(r.name);
+    }
+    assert.ok(!names.has('银灰'));   // 中坚 6★（classicPotentialItemId）：标准池/常驻不可出
+    assert.ok(!names.has('年'));     // 非异格限定（limitParam 并集）：无专属池不可出
+    assert.ok(!names.has('艾拉'));   // 联动干员（teamId=rainbow）：仅 LINKAGE 池可出
+    assert.ok(!names.has('因陀罗')); // 公开招募限定（recruitDetail 高亮）：不可寻访
+    assert.ok(!names.has('断罪者')); // 活动获得：非寻访来源不可抽
+    assert.ok(names.has('能天使'));
+    assert.ok(names.has('蛇屠箱'));  // 中坚 4★ 不移出标准寻访（PRTS 寻访规则）：常驻可出
+  });
+
+  it('pullFromPool：限定池 featured 限定可出（UP 分支与候选均含）', (t) => {
+    const { ark } = makeArk(t);
+    ark.load();
+    const pool = ark.gachaPools.find((p) => p.gachaPoolId === 'pool_limited');
+    // poolRateUps 补 limitParam.limitedCharId → 限定干员即池内 UP
+    assert.deepEqual(ark.poolRateUps(pool), { up6: ['char_2014_nian'], up5: [] });
+    const up = withRand([0.01, 0.4, 0], () => ark.pullFromPool(pool, 1)[0]);
+    assert.equal(up.name, '年');
+    assert.equal(up.up, true);
+    // 非 UP 分支 → 标准 6★ 能天使（限定不落非 UP 候选）
+    const nonUp = withRand([0.01, 0.6, 0], () => ark.pullFromPool(pool, 1)[0]);
+    assert.equal(nonUp.name, '能天使');
+    assert.equal(nonUp.up, false);
+  });
+
+  it('pullFromPool：中坚池 5★/6★ 只出中坚、4★ 出中坚（标准/限定/联动均被排除）', (t) => {
+    const { ark } = makeArk(t);
+    ark.load();
+    const pool = ark.gachaPools.find((p) => p.gachaPoolId === 'pool_classic');
+    // 6★ 候选只剩银灰：能天使(标准)/年(限定)/艾拉(联动) 均被归属规则排除
+    const got = withRand([0.01, 0.99, 0.99], () => ark.pullFromPool(pool, 1)[0]);
+    assert.equal(got.name, '银灰');
+    assert.equal(got.up, true); // main6 即池内 UP
+    const byTier = ark._poolCandidates(pool);
+    assert.ok(byTier.TIER_4.some((c) => c.name === '蛇屠箱')); // 中坚 4★ 在中坚池可出
+    assert.ok(!byTier.TIER_4.some((c) => c.name === '波登可')); // 非中坚 4★ 不在中坚池
+  });
+
+  it('pullFromPool：联动池可出联动干员（UP）与标准干员（非 UP）', (t) => {
+    const { ark } = makeArk(t);
+    ark.load();
+    const pool = ark.gachaPools.find((p) => p.gachaPoolId === 'pool_linkage');
+    const up = withRand([0.01, 0.4, 0], () => ark.pullFromPool(pool, 1)[0]);
+    assert.equal(up.name, '艾拉'); // linkageParam.guaranteeTarget6Char → UP
+    assert.equal(up.up, true);
+    const nonUp = withRand([0.01, 0.6, 0], () => ark.pullFromPool(pool, 1)[0]);
+    assert.equal(nonUp.name, '能天使');
+    assert.equal(nonUp.up, false);
   });
 
   it('pullFromPool(null) 降级 randomPull；无数据目录时输出「未知」兜底名', (t) => {

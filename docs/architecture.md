@@ -32,13 +32,14 @@ src/            Node ESM；入口 src/index.js（引导 17 行：import { main }
                  getAllGroupIds, backfillHistory}——S1–S7/S9/S10 判定链 + 离线补偿 +
                  群枚举（P5 自 runtime.js 逐字拆出）；服务全经 options 注入，仅静态
                  import platform/ 的 logger/store
-    platform/    平台与公共服务（P5 归类，9 文件）
+    platform/    平台与公共服务（P5 归类，10 文件）
       napcat.js     OneBot 11 正向 WS 客户端（连接/重连/echo 请求-响应/事件回调）
       store.js      消息存储层：JSONL 追加持久化 + state 状态 + 时段提取（含文本工具纯函数）
       summarizer.js LLM 群聊概括器（manual/daily 两套 prompt）
       scheduler.js  每日定时器（单任务 HH:MM，链式 setTimeout，防重入）
       analytics.js  SQLite 分析层（node:sqlite；历史 JSONL 后台整库导入 importHistory + 实时镜像 + 抽卡记录 + 活跃榜/统计）
       refresher.js  数据定期更新（ArknightsGameData 下载：ETag 比对 + 结构校验 + 原子写入）
+      usermem.js    用户记忆库（按群隔离：记住的事实增删/去重/容量上限/检索，JSON 整文件读写）
       filter.js     敏感内容过滤（隐私正则 + 敏感词黑名单；纯函数，零 import）
       logger.js     日志（console + 按天轮转文件 logs/YYYY-MM-DD.log，自动清 14 天前）
       http.js       fetch 包装：单次尝试超时 + 网络错误/超时/5xx 重试（fetchRetry；2026-09 起 summarizer/chat/moegirl 调用点共用）
@@ -50,7 +51,8 @@ src/            Node ESM；入口 src/index.js（引导 17 行：import { main }
       moegirl.js    萌娘百科检索器（社区梗 + 通用 ACG 百科；17 个方舟主词条兜底）
       wikipedia.js  维基百科检索器（可选，默认关；需要代理）
   plugins/       功能插件——互不 import；服务一律经 createApp 注入（构造注入 / dispatch ctx）
-    index.js      commandPlugins 装配清单（4 个指令插件集中交付 runtime 注册）
+    index.js      commandPlugins 装配清单（5 个指令插件集中交付 runtime 注册）
+    memory.js     ◇ 用户记忆指令（记住/我的记忆/忘记我——带 750）
     lingo.js      ◇ 词典指令（学习/忘记/查词/词典——规则 1–4，带 700）
     ark.js        ◇ 干员/藏品/生日指令（查干员/查藏品/生日——规则 5–8，带 600）
     gacha.js      ◇ 抽卡指令（卡池/抽卡记录/单抽十连/欧气榜——规则 9–11，带 500）
@@ -76,7 +78,7 @@ P1 起装配与启动拆两层：`createApp(config, overrides)` **纯装配零�
 
 1. 读配置（main）：`CONFIG_PATH` 环境变量 → `config.json`；`llm.apiKey` 缺失回退 `LLM_API_KEY`；仍空 → `err` + `process.exit(1)`。
 2. createApp 按依赖序构造（缺省全部实建，overrides 同名键覆盖实例）：
-   `MessageStore(dataDir)`（建 data/messages/、data/state/）→ `NapCatClient(wsUrl, {selfId, accessToken})`（此刻不连）→ `Summarizer(llm)` → `Scheduler({dailyHour, dailyMinute})`（时刻取 `report.hour/minute`，缺省 9:00；旧 `schedule.*` 键废弃，见 §8 坑 1）→ `Analytics(dataDir/messages.db, dataDir/messages)`（SQLite 建表）→ `DataRefresher(dataDir/ark, dataRefresh)` → 知识服务上移为共享单例：`LingoStore / ArkDB / KnowledgeCache / WikiRetriever / MoegirlRetriever / WikipediaRetriever` → `ChatBrain({cfg, lingo, arkdb, cache, wiki, moegirl, wikipedia})`（构造注入，替代旧 ChatBot 构造内 new 7 子服务）→ `PluginRegistry` → `createRouting(...)`（P5b：S1–S13 路由判定域工厂，core/routing.js；**先于插件注册**——report 插件依赖其产出的 getAllGroupIds）→ 就地构造插件并 register：commandPlugins（plugins/index.js 静态交付）+ summary/refresh/report/chat/webui 五工厂（依赖本闭包实例与就绪标志，createApp 内 createXxxPlugin(deps)）→ 预载 → `client.onEvent(onEvent)` 挂载路由（判定域挂载点）。
+   `MessageStore(dataDir)`（建 data/messages/、data/state/）→ `NapCatClient(wsUrl, {selfId, accessToken})`（此刻不连）→ `Summarizer(llm)` → `Scheduler({dailyHour, dailyMinute})`（时刻取 `report.hour/minute`，缺省 9:00；旧 `schedule.*` 键废弃，见 §8 坑 1）→ `Analytics(dataDir/messages.db, dataDir/messages)`（SQLite 建表）→ `DataRefresher(dataDir/ark, dataRefresh)` → `UserMemory(dataDir/user_memory.json, memory)`（enabled=false 时为 null）→ 知识服务上移为共享单例：`LingoStore / ArkDB / KnowledgeCache / WikiRetriever / MoegirlRetriever / WikipediaRetriever` → `ChatBrain({cfg, lingo, arkdb, cache, wiki, moegirl, wikipedia, usermem, memoryCfg})`（构造注入，替代旧 ChatBot 构造内 new 7 子服务）→ `PluginRegistry` → `createRouting(...)`（P5b：S1–S13 路由判定域工厂，core/routing.js；**先于插件注册**——report 插件依赖其产出的 getAllGroupIds）→ 就地构造插件并 register：commandPlugins（plugins/index.js 静态交付）+ summary/refresh/report/chat/webui 五工厂（依赖本闭包实例与就绪标志，createApp 内 createXxxPlugin(deps)）→ 预载 → `client.onEvent(onEvent)` 挂载路由（判定域挂载点）。
 3. 预载「今天」窗口：`for (gid of config.groups) store.loadFromDisk(gid)`（groups=[] 则什么都不预载；日报/概括按需另载日期段）。
 4. `start()`：注册 `SIGINT/SIGTERM`（stop() → `process.exit(0)`）→ `registry.startAll()`（按 priority 降序调插件 hooks.start，实际执行序：refresh 注册数据自动刷新定时器[§6.3 触发源 a] → report 排下一个每日日报[经 scheduler.start，触发时刻取 report.hour/minute（缺省 9:00）] → webui 按 `webui.enabled !== false` 起面板；旧 start 内 setTimeout/scheduler.start/WebUI 直建段全部迁入插件）→ `analytics.importHistory()`（2026-09 修复坑 5：历史 JSONL 后台异步导入，状态机 importState idle→running→done，见 data-format.md §3；异步执行不阻塞）→ `client.connect()`。
 5. WS open 后 NapCat 合成 `lifecycle/connect` 事件 → routing S1 段置 `state.ready/wsConnected`（state 为 runtime 与 routing 共享的可变状态对象）→ 回填 selfId（若 0）→ `backfillHistory()`（仅一次）。
@@ -98,15 +100,16 @@ S# 编号保留为行为契约锚点（CLAUDE.md 红线与 refactor-proposal 保
 | S6 | @检测三方式：at 段 qq 与 selfId 字符串全等 / 文本含 `@<selfId>` / 子串含 `@机器人` 或 `@PRTS` | — | 未 @ → return |
 | S7 | 静默时段 `inQuietHours`（默认 0:00–8:00；`enabled:false` 关闭） | log 后 return（**吞掉一切 @ 行为，入库照常**） | ↓ |
 | S9 | 剥前导 @（`extractQuestion`：先 `^@机器人\s*` 再 `^@[^\s@]{1,30}\s*`） | — | ↓ |
-| S10 | 问题为空（纯 @ 无内容） | 回复「@昵称 艾特PRTS干什么呀喵」，return | ↓ |
+| S10 | 问题为空（纯 @ 无内容） | 回复「@昵称 艾特Mon3tr干什么呀喵」，return | ↓ |
 | S12 | **插件分发带** `registry.dispatch(ctx)`（text = 剥 @ 后的问题文本） | 见下方分发表；string → routing 层发送 | — |
 
-分发带（dispatch 内按 priority 降序逐插件调用，首个 string/true 即短路；ctx = {lingo, arkdb, analytics, groupId, userId, userName, text}）：
+分发带（dispatch 内按 priority 降序逐插件调用，首个 string/true 即短路；ctx = {lingo, arkdb, memory, analytics, groupId, userId, userName, text}）：
 
 | 带 | 插件（文件） | 认领判定 | 命中行为 |
 |---|---|---|---|
 | 900 | summary（plugins/summary.js）＝原 S8 | 问题文本含任一 `manualSummary` 关键词 | 返回 true；自驱异步 doSummary（per-group 互斥） |
 | 800 | refresh（plugins/refresh.js）＝原 S11 | 问题整串锚定 `^(刷新数据\|更新数据\|更新数据库)$` | 返回 true；先 ack「正在更新本地数据库，稍候…」再异步 api.refresh，失败补发错误消息 |
+| 750 | memory（plugins/memory.js） | 记住/记下 …、整串 我的记忆/查看记忆/记忆列表、整串 忘记我/清空记忆 | 返回 string（读写 UserMemory；功能未启用时回「记忆功能未启用」） |
 | 700 | lingo（plugins/lingo.js）＝原 S12 词典段 | 学习/忘记/查词/词典规则（规则 1–4） | 返回 string（待发送）或 null（未命中） |
 | 600 | ark（plugins/ark.js） | 干员/藏品/生日规则（规则 5–8） | 同左 |
 | 500 | gacha（plugins/gacha.js） | 抽卡/记录/欧气榜规则（规则 9–11） | 同左 |
@@ -119,20 +122,23 @@ S# 编号保留为行为契约锚点（CLAUDE.md 红线与 refactor-proposal 保
 
 - **@检测语义**：at 段 qq 用字符串全等比较；`@机器人`/`@PRTS` 是大小写敏感的**子串**匹配（"不要@机器人"也会命中）。
 - **入库时机**：非 @ 消息、静默时段消息全部照常入库并计数，只是不回复。
-- **指令 > chat**：指令带（700–400）未命中才轮到 chat 带末端消费；chatEnabled=false 时 chat 整链短路（@ 消息无回复，行为同旧 S13）。
+- **指令 > chat**：指令带（750–400）未命中才轮到 chat 带末端消费；chatEnabled=false 时 chat 整链短路（@ 消息无回复，行为同旧 S13）。
 - **静默时段优先级最高**：先于关键词与指令，后于入库。
 - **关键词判定基准（2026-09 已决策，见 §8 坑 11）**：手动总结关键词在分发带内对**剥 @ 后的问题文本**判。常规「@机器人 总结」（带空格或 @ 段后另起文本）与旧 S8（对含 @ 完整文本判）等价；**紧贴 @ 无空格的整串**（如文本「@PRTS总结」、at 段缺 name 时「@10001总结」）整串被 extractQuestion 前导正则吞掉 → 落 S10 空 @ 提示、不触发总结——**既定语义**（旧 S8 会触发，属历史行为，不回退）。
 - **S10 空@ 回复在分发带之前**：纯 @ 消息不经过任何插件（含 summary）——见上条差异。
 - 刷新指令（refresh 插件）与总结关键词不冲突：前者整串锚定、后者子串包含，带序 900 > 800。
 
-## 5. 指令分发表（4 个命令插件，域内序 = 文件内代码序、域间序 = priority 带）
+## 5. 指令分发表（5 个命令插件，域内序 = 文件内代码序、域间序 = priority 带）
 
-规则按领域拆在 4 个插件文件（plugins/index.js 的 commandPlugins 数组交付 runtime 注册）；
-**14 条规则的内部顺序即优先级**：域内代码序 + 域间带 700（词典）> 600（干员）> 500（抽卡）> 400（统计），
+规则按领域拆在 5 个插件文件（plugins/index.js 的 commandPlugins 数组交付 runtime 注册）；
+**17 条规则的内部顺序即优先级**：域内代码序 + 域间带 750（用户记忆）> 700（词典）> 600（干员）> 500（抽卡）> 400（统计），
 与旧 commands.js 线性分发表逐一对应（registry 测试断言 PRIORITY keys 锁定带序）。
 
 | 域（插件文件） | 规则（按代码顺序） | 说明 |
 |---|---|---|
+| 用户记忆（memory.js） | 记住/记下 `…` | 写 UserMemory（按群隔离、同文去重；<2 字拒绝） |
+| 用户记忆 | 整串 我的记忆/查看记忆/记忆列表 | 列当前用户在本群的事实 |
+| 用户记忆 | 整串 忘记我/清空记忆 | 清空当前用户在本群的全部记忆 |
 | 词典（lingo.js） | 学习/纠正/记/定义 `词=释义` 或 `词 释义` | 命中 `lingo.learn` 并落盘 |
 | 词典 | 忘记/删除/删 `词` | |
 | 词典 | 查词/词典查/释义 `词` | |
@@ -174,7 +180,7 @@ logger（core/platform/logger.js）← core 全部服务 + 全部插件（runtim
 wiki（knowledge 组纯函数 extractKeywords/isArknightsRelated）← moegirl、wikipedia、chat 插件
 store（platform 组 fmtFull/hhmm）← summarizer、summary 插件、routing（fmtFull）
 http（platform 组 fetchRetry，2026-09 加固）← summarizer、moegirl、chat 插件（_reply 的 LLM 调用）
-registry（core 顶层，PRIORITY 常量）← lingo/ark/gacha/stats/chat/refresh/summary 插件（读带号）
+registry（core 顶层，PRIORITY 常量）← memory/lingo/ark/gacha/stats/chat/refresh/summary 插件（读带号）
 routing（core 顶层）← platform 组 logger/store（静态，fmtFull/log）+ 其余服务全经 createRouting
         options 注入（零插件工厂 import；S12 经注入的 registry 分发）
 runtime（core 顶层）← platform/knowledge/registry/routing 全部 + plugins 全部工厂（唯一装配者）
@@ -183,7 +189,7 @@ platform/ 与 knowledge/ 组间：knowledge → platform 仅两条——logger�
 filter.js 零 import；plugins 间零互 import（服务一律经 createApp 注入/ctx 注入）
 ```
 
-**实例化关系**：`createApp` new 出 MessageStore / NapCatClient / Summarizer / Scheduler / Analytics / DataRefresher 6 个平台服务 + LingoStore / ArkDB / KnowledgeCache / 三个 Wiki 检索器 6 个知识单例，共 12 个实例；`ChatBrain`（注入 6 个知识单例）、`createRouting`（注入判定所需服务与 state 共享状态对象）与 9 个插件描述符随后装配。**重构前最大耦合点「ChatBot 是 lingo/arkdb 等服务宿主、commands/webui 反向借用 chatBot.lingo」已拆**：知识服务现在是 runtime 装配的事实共享单例，brain（字段引用）与指令插件（dispatch ctx）与 webui（getLingo）注入/借用的都是同一批实例（详见 refactor-proposal「服务上移」）。
+**实例化关系**：`createApp` new 出 MessageStore / NapCatClient / Summarizer / Scheduler / Analytics / DataRefresher 6 个平台服务 + UserMemory（config.memory.enabled=false 时为 null）+ LingoStore / ArkDB / KnowledgeCache / 三个 Wiki 检索器 6 个知识单例，共 13 个实例；`ChatBrain`（注入 6 个知识单例 + UserMemory）、`createRouting`（注入判定所需服务与 state 共享状态对象）与 10 个插件描述符随后装配。**重构前最大耦合点「ChatBot 是 lingo/arkdb 等服务宿主、commands/webui 反向借用 chatBot.lingo」已拆**：知识服务现在是 runtime 装配的事实共享单例，brain（字段引用）与指令插件（dispatch ctx）与 webui（getLingo/getMemory）注入/借用的都是同一批实例（详见 refactor-proposal「服务上移」）。
 
 ## 8. 已知怪癖与坑（改代码前必读）
 
@@ -197,4 +203,4 @@ filter.js 零 import；plugins 间零互 import（服务一律经 createApp 注�
 8. **命令未命中也会进 LLM**：任何 @ 且非空文本，若各指令带与刷新/总结关键词都不命中，都会消耗一次 LLM 调用（chatEnabled:false 时不发不耗）。
 9. ~~**lastSeenTs 是全局单值**（非按群），backfill 的起点由任一群的最后消息推进~~（2026-09 已修复）：现按群存储（`data/state/lastSeen.json` 的 `{"byGroup": {...}}`），backfill 每群独立起点 `max(该群水位, now−maxHours)`；旧 v1 单值形状启动时迁移播种到磁盘已知群目录（群号 String 归一存储）。修复动机：单群拉取失败时全局水位被其他群推高，失败群缺口永久错过。
 10. **node:sqlite 需 Node ≥22.5**：engines 已声明 ≥22.5（原 ≥18 过宽，2026-09 修复）。
-11. **总结关键词判定基准（既定语义，勿按旧行为回退）**：旧 S8 在剥 @ 前对**含 @ 的完整文本**判关键词（先于空 @ 判定）；现 summary 插件对**剥 @ 后问题文本**判（在 S10 之后）——详见 §4 要点。输入形态「紧贴 @ 无空格的整串且整串含关键词」（如文本「@PRTS总结」、at 段缺 name 时「@10001总结」）：旧代码触发手动总结，现代码回「艾特PRTS干什么呀喵」。**2026-09 决策：不回退**——有效文本必须与 @ 分隔，紧贴无空格的整串不应通过（更符合逻辑）；锁定测试在 test/smoke/runtime-dispatch.test.js（「紧贴 @ 无空格的整串不触发任何插件」）。剥 @ 后关键词仍完整（如「@机器人总结」被 `^@机器人\s*` 单独剥掉）时触发不受影响。
+11. **总结关键词判定基准（既定语义，勿按旧行为回退）**：旧 S8 在剥 @ 前对**含 @ 的完整文本**判关键词（先于空 @ 判定）；现 summary 插件对**剥 @ 后问题文本**判（在 S10 之后）——详见 §4 要点。输入形态「紧贴 @ 无空格的整串且整串含关键词」（如文本「@PRTS总结」、at 段缺 name 时「@10001总结」）：旧代码触发手动总结，现代码回「艾特Mon3tr干什么呀喵」。**2026-09 决策：不回退**——有效文本必须与 @ 分隔，紧贴无空格的整串不应通过（更符合逻辑）；锁定测试在 test/smoke/runtime-dispatch.test.js（「紧贴 @ 无空格的整串不触发任何插件」）。剥 @ 后关键词仍完整（如「@机器人总结」被 `^@机器人\s*` 单独剥掉）时触发不受影响。

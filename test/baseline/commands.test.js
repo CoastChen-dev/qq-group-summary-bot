@@ -18,6 +18,7 @@ import { commandPlugins } from '../../src/plugins/index.js';
 import { LingoStore } from '../../src/core/knowledge/lingo.js';
 import { ArkDB } from '../../src/core/knowledge/arkdb.js';
 import { Analytics } from '../../src/core/platform/analytics.js';
+import { UserMemory } from '../../src/core/platform/usermem.js';
 import { makeTmp, cleanupTmpDirs, silenceLog, todayLabel, trackDbClose, withRand, writeArkTables } from '../helpers.js';
 
 after(silenceLog());
@@ -41,6 +42,7 @@ function makeCtx({ withAnalytics = true } = {}) {
   const ctx = {
     lingo: new LingoStore(path.join(dir, 'lingo.json')),
     arkdb: new ArkDB(writeArkTables(dir)),
+    memory: new UserMemory(path.join(dir, 'user_memory.json')),
     analytics: null,
     groupId: '10001',
     userId: 'u1',
@@ -256,5 +258,35 @@ describe('统计类指令与兜底边界（规则 12-14）', () => {
     for (const q of ['随便聊聊', '你好呀', '查', '学习', '总结一下今天', '@全体成员 晚上好', '波登可', '']) {
       assert.equal(tryCommand(ctx, q), null, `"${q}" 应为 null`);
     }
+  });
+});
+
+describe('用户记忆（memory 插件，priority 750 先于词典）', () => {
+  it('记住：写入并回执；重复提示已记住；我的记忆列出；忘记我清空', (t) => {
+    const ctx = makeCtx();
+    assert.equal(tryCommand(ctx, '记住 我喜欢夜莺'), '（认真记下）记住了，博士：我喜欢夜莺');
+    assert.equal(tryCommand(ctx, '记住 我喜欢夜莺'), '这个我已经记住啦：我喜欢夜莺');
+    assert.equal(tryCommand(ctx, '记住 我'), '要记住的内容太短了，说「记住 …」就行');
+    assert.deepEqual(ctx.memory.listFacts('10001', 'u1').map((f) => f.text), ['我喜欢夜莺']);
+
+    assert.equal(tryCommand(ctx, '我的记忆'), '【关于你的记忆】\n1. 我喜欢夜莺\n（共 1 条）');
+    assert.equal(tryCommand(ctx, '忘记我'), '（尾巴耷拉下来）已经把关于你的记忆都忘掉了……');
+    assert.equal(tryCommand(ctx, '我的记忆'), '还没有关于你的记忆呢，说「记住 …」我就会记住的~');
+    assert.equal(tryCommand(ctx, '忘记我'), '本来就没有关于你的记忆呀');
+  });
+
+  it('与 lingo「忘记 词」不碰撞：带空格走词典、无空格「忘记我」走记忆', (t) => {
+    const ctx = makeCtx();
+    tryCommand(ctx, '学习 轮椅轴=挂机套路');
+    assert.equal(tryCommand(ctx, '忘记 轮椅轴'), '已忘记词条：轮椅轴');
+    assert.equal(tryCommand(ctx, '忘记我'), '本来就没有关于你的记忆呀');
+  });
+
+  it('缺 memory 服务（config.memory.enabled=false）：三条规则都回「记忆功能未启用」', (t) => {
+    const ctx = makeCtx();
+    ctx.memory = null;
+    assert.equal(tryCommand(ctx, '记住 测试'), '记忆功能未启用');
+    assert.equal(tryCommand(ctx, '我的记忆'), '记忆功能未启用');
+    assert.equal(tryCommand(ctx, '忘记我'), '记忆功能未启用');
   });
 });

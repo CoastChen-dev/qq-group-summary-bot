@@ -9,7 +9,8 @@
 
 - 实时接收群消息并持久化到 `data/messages/<群号>/<日期>.jsonl`
 - 群里发「@机器人 总结 / @机器人 /总结 / @机器人 #总结」可手动触发概括（**必须 @ 机器人**，防止误触发）
-- **AI 群聊**：群里 @机器人 说其他内容时，调用 DeepSeek 以群友身份回复（带上下文记忆，每群保留最近 N 条）
+- **AI 群聊**：群里 @机器人 说其他内容时，调用 DeepSeek 以群友身份回复（带上下文记忆，每群保留最近 N 条；群友以群昵称被识别，可理解「他/刚才那位」指代）
+- **用户记忆**：群友说「@机器人 记住 …」写入记忆（**按群隔离**，每人 20 条上限），聊天时自动参考；对话后自动提取值得记住的稳定信息（`memory.autoExtract` 可关）；「我的记忆」「忘记我」自助管理，WebUI 可查看/删除
 - **三级知识库**：回答时自动检索资料，覆盖新信息与社区梗/黑话
   - **本地梗词典** `data/lingo.json`：可手动维护 + 命中即用（最快）
   - **PRTS.Wiki**：明日方舟数据（干员/关卡/机制，仅方舟问题时检索）
@@ -42,13 +43,13 @@ src/
     registry.js   插件注册表（按优先级带分发消息 / hooks 起停插件）
     routing.js    S1–S13 消息路由判定链 + 离线补偿（P5 自 runtime.js 拆出，装配期挂载）
     platform/     napcat.js / store.js / summarizer.js / scheduler.js / analytics.js / refresher.js
-                  filter.js / logger.js / http.js
+                  usermem.js / filter.js / logger.js / http.js
     knowledge/    lingo.js / arkdb.js / cache.js / wiki.js / moegirl.js / wikipedia.js   知识服务共享单例
   plugins/      功能插件（互不 import；服务一律经 createApp 注入）
-    lingo.js / ark.js / gacha.js / stats.js   确定性指令（原 commands.js 按领域拆）
+    memory.js / lingo.js / ark.js / gacha.js / stats.js   确定性指令（原 commands.js 按领域拆）
     summary.js / refresh.js / report.js   手动总结 / 数据刷新 / 每日日报（后台流程插件）
     chat.js      AI 群聊（ChatBrain）+ LLM 兜底分发
-    webui.js     Web 管理面板（状态/词典/刷新/配置）
+    webui.js     Web 管理面板（状态/词典/用户记忆/刷新/配置）
 test/           node:test 测试（npm test）
   baseline/     行为基线（重构前直测 store/analytics/lingo/arkdb/commands 语义）
   smoke/        import 面 / 注册表 / 插件接线 / 全链集成冒烟
@@ -56,7 +57,7 @@ config.example.json  配置模板（脱敏，可提交仓库）
 config.json          实际配置（含密钥，已被 .gitignore 排除）
 start_bot.bat        Windows 快捷启动脚本
 logs/                日志（按天轮转，自动清理 14 天前）
-data/                运行数据（消息记录 + 概括进度 + 干员库 + 词典 + 最后在线时间）
+data/                运行数据（消息记录 + 概括进度 + 干员库 + 词典 + 用户记忆 + 最后在线时间）
 ```
 
 ## 快速开始
@@ -135,6 +136,7 @@ curl -o data/ark/gacha_table.json \
 - `quiet`：静默时段（默认 `enabled: true, start: 0, end: 8`，即 0:00-8:00 不响应总结；设 `enabled: false` 可关闭）
 - `backfill`：离线补偿（`maxHours` 默认 72，为**各群** lastSeen 的兜底上限；实际从该群上次下线的 lastSeen 时刻开始补，每群水位独立）
 - `dataRefresh`：数据定期更新（`enabled` 默认 true，`intervalHours` 默认 24，`firstDelayMinutes` 默认 30，`announce` 默认 false 关闭新增播报）
+- `memory`：用户记忆（`enabled` 默认 true；`file` 默认 `./data/user_memory.json`；`autoExtract` 默认 true 对话后自动提取；`maxFactsPerUser` 默认 20、`maxFactsGlobal` 默认 2000，超限丢最旧）
 - `webui`：Web 管理面板（`enabled` 默认 true，`host` 默认 127.0.0.1 仅本机，`port` 默认 5210，`token` 可选访问口令）
 - `filter`：敏感内容过滤（`enabled: true` 默认开启）
 - `commands.manualSummary`：手动触发概括的关键词（需 @机器人 且消息包含其中任一关键词）
@@ -161,11 +163,12 @@ Windows 下也可直接双击 `start_bot.bat`（后台运行，日志写入 `log
 - **AI 群聊**：在群里 @机器人 直接说话（如「@机器人 你好」「@机器人 阿米娅是谁」），机器人以 AI 群友身份回复，能记住群内最近对话；涉及明日方舟的问题会自动检索 PRTS.Wiki 作为参考
 - **每日日报**：每天（默认 9:00，可配 `report.hour/minute`）自动把昨日活跃群（≥100 条消息）的概括私聊发给 `report.userId`
 - **词典学习**：`@机器人 学习 词=释义`（教新梗）、`@机器人 忘记 词`、`@机器人 查词 词`、`@机器人 词典`
+- **用户记忆**：`@机器人 记住 我喜欢夜莺`（记一条）、`@机器人 我的记忆`（查看）、`@机器人 忘记我`（清空本群记忆）
 - **任务指令**：`查干员 X`、`查藏品 X`、`干员生日 X`、`今日生日`、`活跃榜 [N天]`、`群统计`
 - **真实卡池抽卡**：`卡池`（列出当前开放卡池及 UP 干员）、`十连 [池号/名称]`、`单抽 [池号/名称]`（基于游戏真实卡池数据与出率：6★2% 5★8% 4★50% 3★40%，UP 干员占其星级概率 50%）、`抽卡记录 [N]`、`谁最欧`
 - **数据定期更新**：每 24 小时自动从 ArknightsGameData（jsDelivr 镜像）更新干员表/档案/藏品/卡池数据，ETag 版本比对（未变化跳过）、结构校验（防上游数据损坏）+ 旧文件备份（.bak）、原子写入 + 内存热重载；群内 `刷新数据` 可手动触发；新增内容播报默认关闭（`dataRefresh.announce`）
 - **抽卡记录互动**：抽卡结果自动记入 SQLite，支持 `抽卡记录 [N]`（个人记录与统计）、`谁最欧`（本群欧气榜）
-- **Web 管理面板**（`http://127.0.0.1:5210`）：运行状态、数据统计、词典增删、数据刷新、配置查看（密钥脱敏）
+- **Web 管理面板**（`http://127.0.0.1:5210`）：运行状态、数据统计、词典增删、用户记忆查看/删除、数据刷新、配置查看（密钥脱敏）
 
 ## Windows 开机自启（可选）
 

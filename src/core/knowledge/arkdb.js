@@ -1,6 +1,7 @@
 /*
  * 本地明日方舟数据库（ArkDB）：干员表 / 档案 / 肉鸽藏品 / 真实卡池四张表 +
  * 语义模糊匹配 + 抽卡引擎，支撑指令插件的干员/藏品/生日/卡池/抽卡指令秒回。
+ * 抽卡引擎按真实寻访规则过滤候选（来源/招募限定/限定异格/联动小队/中坚归属，见 _poolCandidates）。
  *
  * 对外导出：ArkDB 类（各公开方法见下）；默认只读 data/ark/ 下 refresher.js 下载的四张
  * JSON（character_table / handbook_info_table / roguelike_topic_table /
@@ -23,6 +24,10 @@ const DEFAULT_DATA_DIR = path.resolve(__dirname, '..', '..', '..', 'data', 'ark'
 // 星级键 → 展示文本（randomPull / pullFromPool 共用；游戏数据 rarity 字段即 TIER_x 键）
 const RARITY_STARS = { TIER_6: '★★★★★★', TIER_5: '★★★★★', TIER_4: '★★★★', TIER_3: '★★★' };
 
+// 联动干员小队代号：上游数据没有「联动」标记，只能按小队识别——这些小队成员仅联动寻访
+// （LINKAGE）可出；新联动上线时在此补充小队代号（数据里查 character_table 的 teamId）。
+const COLLAB_TEAMS = new Set(['sees', 'rainbow', 'laios', 'mujica']);
+
 /**
  * 明日方舟本地数据库：四表懒加载（load，幂等）+ 名称/藏品查询与语义模糊匹配 +
  * 权重抽卡与真实卡池抽卡（出率语义见 randomPull / pullFromPool 的注释）。
@@ -38,6 +43,8 @@ export class ArkDB {
     this.aliasMap = new Map();   // 别名/名称 -> charId
     this.relics = new Map();     // 藏品名 -> 藏品信息
     this.gachaPools = [];        // 真实卡池列表
+    this.limitedIds = new Set(); // 限定干员 charId（卡池 limitParam 并集 + 异格 isSpChar）
+    this.recruitOnly = new Set();// 公开招募限定干员名（recruitDetail 绿色高亮「不可寻访」段）
     this._loaded = false;
   }
 
@@ -65,6 +72,8 @@ export class ArkDB {
    */
   load() {
     if (this._loaded) return;
+    this.limitedIds = new Set(); // 重载时重建（卡池/干员表数据可能已更新）
+    this.recruitOnly = new Set();
     const charFile = path.join(this.dataDir, 'character_table.json');
     const handbookFile = path.join(this.dataDir, 'handbook_info_table.json');
 
@@ -84,7 +93,10 @@ export class ArkDB {
             desc: (c.description || '').replace(/<[^>]+>/g, ''),
             nation: c.nation || '',
             team: c.team || '',
+            teamId: c.teamId || '',
             groupId: c.groupId || '',
+            obtain: c.itemObtainApproach || '',
+            classic: !!c.classicPotentialItemId,
             notObtainable: c.isNotObtainable === true,
             spChar: c.isSpChar === true,
           });
@@ -147,10 +159,23 @@ export class ArkDB {
       try {
         const gt = JSON.parse(fs.readFileSync(gachaFile, 'utf8'));
         this.gachaPools = (gt.gachaPoolClient || []).filter((p) => p.gachaPoolId && p.gachaPoolName);
-        log(`[arkdb] 已加载 ${this.gachaPools.length} 个卡池`);
+        // 限定干员 = 各池 limitParam.limitedCharId 并集（覆盖年/夕/令等非异格限定）
+        for (const p of this.gachaPools) {
+          if (p.limitParam?.limitedCharId) this.limitedIds.add(p.limitParam.limitedCharId);
+        }
+        // 公开招募限定（不可寻访）：recruitDetail 绿色高亮 <@rc.eml>…</> 段，如因陀罗/火神/安德切尔
+        for (const m of String(gt.recruitDetail || '').matchAll(/<@rc\.eml>([^<]+)<\/>/g)) {
+          this.recruitOnly.add(m[1].trim());
+        }
+        log(`[arkdb] 已加载 ${this.gachaPools.length} 个卡池（限定 ${this.limitedIds.size}、招募限定 ${this.recruitOnly.size}）`);
       } catch (e) {
         log(`[arkdb] 卡池表加载失败: ${e.message}`);
       }
+    }
+
+    // 异格限定（isSpChar，含非卡池异格）并入限定集合——仅其专属池（featured）可出
+    for (const c of this.characters.values()) {
+      if (c.spChar) this.limitedIds.add(c.id);
     }
 
     this._loaded = true;
@@ -383,8 +408,8 @@ export class ArkDB {
 
   /**
    * 权重抽卡（无卡池时的降级常驻抽卡路径）：星级按明日方舟出率 6★2% / 5★8% /
-   * 4★50% / 3★40% 抽取，同星级内等概率随机；排除不可获取（预备干员 isNotObtainable）
-   * 与异格限定（isSpChar）。
+   * 4★50% / 3★40% 抽取，同星级内等概率随机；候选 = 标准寻访规则（_poolCandidates(null)，
+   * 排除活动/商店等非寻访来源、公开招募限定、限定/异格、联动与中坚干员）。
    * 副作用: 首次触发 load；结果不落盘——逐抽记录由调用方（指令插件 → analytics）负责。
    * @param {number} [n=1] - 抽数（单抽 1、十连 10）
    * @returns {Array<{star: string, name: string, up: boolean}>} 逐抽结果（无 UP 概念，
@@ -393,7 +418,7 @@ export class ArkDB {
   randomPull(n = 1) {
     this.load();
     const weights = { TIER_6: 0.02, TIER_5: 0.08, TIER_4: 0.5, TIER_3: 0.4 };
-    const pool = [...this.characters.values()].filter((c) => c.name && weights[c.rarity] && this.isOperator(c) && !c.spChar);
+    const byTier = this._poolCandidates(null);
     const pickOne = () => {
       let r = Math.random();
       for (const [tier, w] of Object.entries(weights)) {
@@ -405,7 +430,7 @@ export class ArkDB {
     const results = [];
     for (let i = 0; i < n; i++) {
       const { tier, star } = pickOne();
-      const candidates = pool.filter((c) => c.rarity === tier);
+      const candidates = byTier[tier] || [];
       const c = candidates[Math.floor(Math.random() * candidates.length)];
       results.push({ star, name: c ? c.name : '（未知）', up: false });
     }
@@ -415,15 +440,73 @@ export class ArkDB {
   // ---- 真实卡池系统 ----
 
   /**
-   * 判定某干员是否为「可抽取的真实干员」（排除召唤物 TOKEN/陷阱 TRAP 职业
-   * 与不可获取的预备干员 isNotObtainable）——randomPull/pullFromPool 的候选池
-   * 过滤用；插件/外部 diff（如数据更新播报）不再直读职业白名单与私有标记。
+   * 判定某干员是否具备寻访候选的基础资格：真实职业（排除召唤物 TOKEN/陷阱 TRAP 等）
+   * 且非不可获取（预备干员 isNotObtainable）。完整寻访规则（来源/限定/中坚/联动）
+   * 见 _poolCandidates；插件/外部 diff（如数据更新播报）经此判断真实干员。
    * @param {Object} c - 干员基础对象（load 后的 characters 条目或同形对象）
-   * @returns {boolean} 可抽取为 true；空对象/缺 profession 恒 false
+   * @returns {boolean} 基础资格通过为 true；空对象/缺 profession 恒 false
    */
   isOperator(c) {
     return ['MEDIC', 'WARRIOR', 'SPECIAL', 'SNIPER', 'SUPPORT', 'TANK', 'PIONEER', 'CASTER'].includes(c.profession)
       && !c.notObtainable;
+  }
+
+  /**
+   * 按池型计算可抽取候选（真实寻访规则，randomPull/pullFromPool 共用的唯一候选源）：
+   * ① 基础资格：isOperator 且获取途径含「寻访」——活动赠送、凭证/信用商店、集成战略、
+   *    剧情、周年/礼包等非寻访来源不可抽取；
+   * ② 公开招募限定（recruitDetail 绿色高亮「不可寻访」干员，如因陀罗/火神/安德切尔）不可寻访；
+   * ③ 限定干员（limitParam.limitedCharId 并集 + 异格 isSpChar，含年/夕/令等非异格限定）
+   *    仅在专属池（featured）可出；
+   * ④ 联动小队干员（COLLAB_TEAMS）仅 LINKAGE 联动池可出；
+   * ⑤ 中坚归属仅对 5★/6★ 生效（PRTS 寻访规则：4★/3★ 追加中坚但**不移出标准寻访**）——
+   *    中坚系池（CLASSIC 开头 / FESCLASSIC）5★/6★ 只出中坚、4★/3★ 只出中坚；
+   *    标准系池 5★/6★ 只出非中坚、4★/3★ 全出；
+   * ⑥ 定向池 6★ 白名单：跨年欢庆（attainRare6CharList）与归航/定向甄选（rarityPickCharDict
+   *    前三，模拟已锁定三人）之外的 6★ 一律不可出（白名单内可含中坚/限定）；
+   * ⑦ 池内 featured（UP/限定/联动目标，见 poolRateUps）无视以上归属限制恒可出。
+   * @param {Object|null} pool - 卡池对象；null 按标准池（randomPull 降级路径）
+   * @returns {{TIER_6: Object[], TIER_5: Object[], TIER_4: Object[], TIER_3: Object[]}}
+   *   按星级分桶的候选（星级不在 3–6 的干员不参与）
+   */
+  _poolCandidates(pool) {
+    const byTier = { TIER_6: [], TIER_5: [], TIER_4: [], TIER_3: [] };
+    const type = pool?.gachaRuleType || '';
+    const d = pool?.dynMeta || {};
+    const isClassic = /CLASSIC/.test(type) || type === 'FESCLASSIC';
+    const isLinkage = type === 'LINKAGE';
+    const { up6, up5 } = this.poolRateUps(pool);
+    const featured = new Set([...up6, ...up5]);
+    // 定向池 6★ 白名单（见方法注释 ⑥）：跨年欢庆用可选全集，归航/定向甄选用前三（模拟锁定）
+    let restricted6 = null;
+    if (Array.isArray(d.attainRare6CharList) && d.attainRare6CharList.length) {
+      restricted6 = new Set(d.attainRare6CharList);
+    } else if (d.rarityPickCharDict?.TIER_6?.length) {
+      restricted6 = new Set(up6);
+    }
+    for (const c of this.characters.values()) {
+      if (!c.name || !byTier[c.rarity] || !this.isOperator(c)) continue;
+      if (c.rarity === 'TIER_6' && restricted6) {
+        if (restricted6.has(c.id) && /寻访/.test(c.obtain || '') && !this.recruitOnly.has(c.name)) {
+          byTier.TIER_6.push(c);
+        }
+        continue;
+      }
+      if (featured.has(c.id)) { byTier[c.rarity].push(c); continue; }
+      if (!/寻访/.test(c.obtain || '')) continue;
+      if (this.recruitOnly.has(c.name)) continue;
+      if (this.limitedIds.has(c.id)) continue;
+      if (COLLAB_TEAMS.has(c.teamId)) {
+        if (isLinkage) byTier[c.rarity].push(c);
+        continue;
+      }
+      if (isClassic) {
+        if (c.classic) byTier[c.rarity].push(c);
+      } else if (c.rarity === 'TIER_4' || c.rarity === 'TIER_3' || !c.classic) {
+        byTier[c.rarity].push(c);
+      }
+    }
+    return byTier;
   }
 
   /**
@@ -469,8 +552,9 @@ export class ArkDB {
   }
 
   /**
-   * 提取卡池的 UP 干员名单：读 pool.dynMeta 的 main6RarityCharId / rare5CharList /
-   * rarityPickCharDict，合并去重并只保留干员表中真实存在的 id。
+   * 提取卡池的 UP/featured 干员名单：读 pool.dynMeta 的 main6RarityCharId / rare5CharList /
+   * rarityPickCharDict，并补 limitParam.limitedCharId（限定池）与 linkageParam.guaranteeTarget6Char
+   * （联动池）；合并去重并只保留干员表中真实存在的 id。
    * @param {Object} pool - 卡池对象（如 currentGachaPools() 的条目）
    * @returns {{up6: string[], up5: string[]}} 6★/5★ UP 干员的 charId 数组；无 UP 时为空数组
    */
@@ -484,6 +568,8 @@ export class ArkDB {
       for (const id of (d.rarityPickCharDict.TIER_6 || []).slice(0, 3)) up6.push(id);
       for (const id of (d.rarityPickCharDict.TIER_5 || []).slice(0, 3)) up5.push(id);
     }
+    if (pool?.limitParam?.limitedCharId) up6.push(pool.limitParam.limitedCharId);
+    if (pool?.linkageParam?.guaranteeTarget6Char) up6.push(pool.linkageParam.guaranteeTarget6Char);
     return {
       up6: [...new Set(up6)].filter((id) => this.characters.has(id)),
       up5: [...new Set(up5)].filter((id) => this.characters.has(id)),
@@ -493,7 +579,8 @@ export class ArkDB {
   /**
    * 从真实卡池抽卡：星级概率 6★2% / 5★8% / 4★50% / 3★40%（与 randomPull 出率一致），
    * 命中星级后再掷 50%：UP 干员占该星级的一半概率（多名 UP 均分），另一半由该星级
-   * 非 UP 干员均分；异格/联动限定（isSpChar）仅在其 UP 卡池中可出。
+   * 非 UP 干员均分；候选按真实寻访规则过滤（_poolCandidates：来源/招募限定/限定异格/
+   * 联动小队/中坚归属，池内 featured 恒可出）。
    * 副作用: 首次触发 load；结果不落盘——逐抽记录由调用方（指令插件 → analytics）负责。
    * @param {Object} pool - 卡池对象；null/undefined 时降级为 randomPull(count)
    * @param {number} [count=10] - 抽数
@@ -506,13 +593,7 @@ export class ArkDB {
     const { up6, up5 } = this.poolRateUps(pool);
     const upSet6 = new Set(up6);
     const upSet5 = new Set(up5);
-    const byTier = { TIER_6: [], TIER_5: [], TIER_4: [], TIER_3: [] };
-    for (const c of this.characters.values()) {
-      if (!c.name || !byTier[c.rarity] || !this.isOperator(c)) continue;
-      // 异格/联动限定干员（isSpChar）仅在其 UP 卡池中可抽取
-      if (c.spChar && !upSet6.has(c.id) && !upSet5.has(c.id)) continue;
-      byTier[c.rarity].push(c);
-    }
+    const byTier = this._poolCandidates(pool);
     const pickTier = () => {
       const r = Math.random();
       if (r < 0.02) return 'TIER_6';

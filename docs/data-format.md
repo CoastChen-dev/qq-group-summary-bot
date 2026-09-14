@@ -12,6 +12,7 @@ data/
   messages.db                           SQLite 分析层（messages + pulls 两表）
   lingo.json                            群友教出来的梗词典（可手动编辑）
   knowledge_cache.json                  知识检索缓存
+  user_memory.json                      用户记忆（按群隔离的「记住」事实，可手动编辑/WebUI 管理）
   ark/                                  ArknightsGameData 本地镜像（定期更新）
     character_table.json  handbook_info_table.json
     roguelike_topic_table.json  gacha_table.json
@@ -63,10 +64,24 @@ data/
 
 | 文件 | 结构约定 | ArkDB 用途 |
 |---|---|---|
-| `character_table.json` | 对象（或含 `.characters`） | 干员基础表（星级/职业/标签/是否可获取等） |
+| `character_table.json` | 对象（或含 `.characters`） | 干员基础表（星级/职业/标签/是否可获取等）；抽卡规则字段：`itemObtainApproach`（寻访来源）、`classicPotentialItemId`（中坚）、`teamId`（联动小队） |
 | `handbook_info_table.json` | `.handbookDict` | 档案（从 storyText 正则抽 性别/生日/种族/身高…） |
 | `roguelike_topic_table.json` | 递归收集 `type==='RELIC'` 节点 | 肉鸽藏品（807 个） |
-| `gacha_table.json` | `.gachaPoolClient`（过滤非空） | 卡池列表（444 个历史池） |
+| `gacha_table.json` | `.gachaPoolClient`（过滤非空） | 卡池列表（444 个历史池）；`dynMeta`/`limitParam`/`linkageParam`（UP/限定/联动目标）、`recruitDetail`（公开招募「不可寻访」高亮名单） |
+
+- 抽卡候选按真实寻访规则过滤（`arkdb._poolCandidates`）：非寻访来源（活动/商店/集成战略/剧情/礼包）、公开招募限定（recruitDetail 高亮段）、限定/异格（仅专属池）、联动小队（仅 LINKAGE 池）、5★/6★ 中坚归属（4★/3★ 不移出标准寻访）、定向池 6★ 白名单（`attainRare6CharList` / `rarityPickCharDict` 前三）。
+
+## 6. 用户记忆（data/user_memory.json）
+
+```json
+{"groups": {"<群号>": {"<QQ>": {"name": "最近昵称", "updatedAt": 秒,
+  "facts": [{"text": "喜欢夜莺", "at": 秒, "src": "manual|auto"}]}}}}
+```
+
+- **写入方**：`UserMemory.setFact`（「记住 …」指令 = manual；对话后自动提取 = auto；同文去重只刷新时间）；`forgetUser` / `removeFact`（指令「忘记我」/ WebUI 删除）。整文件覆盖写（2 空格缩进）；损坏 → log + 空表继续，写失败只记日志（与 lingo/cache 同惯例）。
+- **容量**：每人 `memory.maxFactsPerUser`（默认 20，超限丢最旧）；全局 `memory.maxFactsGlobal`（默认 2000，超限全局丢最旧）。
+- **读取**：`listFacts`（chat 注入【用户记忆】段）、`findByMention`（按群内昵称找人）、`dump`（WebUI 管理页）。**按群隔离**——不同群的记忆互不可见。
+- **关闭**：`memory.enabled=false` 时不加载不注入，记忆指令回「记忆功能未启用」。
 
 - ArkDB 惰性加载（首次访问触发，`_loaded` 幂等）；缺文件仅日志、空表继续；`reload()` 供刷新后热替换。
 - `DataRefresher` 更新流程：`If-None-Match: <etag>` → 304 视为未变化跳过；校验（<1024B / 首字节非 `{` / 结构计数 干员≥500、档案≥100、藏品≥500、池≥10）→ 写 `.tmp` → 旧文件复制为 `.bak` → rename 原子替换；`.etags.json` 在 4 表全部处理完后保存。失败路径可能残留 `.tmp`（无人清理，无害）。
