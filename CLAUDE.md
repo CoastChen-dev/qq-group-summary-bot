@@ -39,9 +39,10 @@ QQ 群聊机器人（NapCat / OneBot 11 / WS），Node ESM，LLM 生成群聊概
 
 - **新群指令**：先归领域 → 在对应指令插件内沿既有分隔段插入（域内代码序 = 优先级）：用户记忆 → plugins/memory.js、词典 → plugins/lingo.js、干员/藏品 → plugins/ark.js、抽卡 → plugins/gacha.js、统计 → plugins/stats.js。全新领域：新建 createXxxPlugin 工厂 + 加入 plugins/index.js 的 `commandPlugins` 数组 + 在 core/registry.js `PRIORITY` 加带（须同步 registry 测试对 keys 的断言）。
 - **用户记忆（记什么/怎么记）**：存储 core/platform/usermem.js（JSON 按群隔离；每人 20 条/全局 2000 条上限）；指令 plugins/memory.js；chat 侧注入与自动提取在 plugins/chat.js 的 buildMessages/_extractMemory；配置 config.memory.*（enabled/autoExtract/容量）。
+- **新 LLM 工具（function calling）**：在 plugins/chat.js 的 `createChatTools` 里加 `{name, description, parameters, handler}`；贴表情 ID 表在 core/platform/emoji.js（NapCat 官方 qface ID 空间，勿用旧版编号）；总开关 config.tools.*，贴表情单独由 config.emojiLike.enabled 控制。
 - **整类消息判定（非指令）**：仿 summary/refresh/chat 插件写 handleMessage(ctx)（ctx = {groupId, userId, userName, text, lingo, arkdb, analytics}；返回 string = runtime 代发、true = 插件自驱、null = 让位）；描述符语义见 core/registry.js 头注释。
 - **新定时/后台流程**：在 core/runtime.js createApp 的插件装配段就地构造 createXxxPlugin({依赖闭包}) 并 register（hooks.start 注册定时/调度，hooks.stop 清理）；后台服务依赖注入与就绪标志模式见 plugins/report.js。
-- **新知识源 / 调整检索编排**：plugins/chat.js 的 `ChatBrain.chat()` 主流程（本地快路 → 缓存 → 联网检索 → 排序 → `_reply`）；检索器本体按惯例放 core/knowledge/ 并由 runtime 装配为共享单例注入。
+- **新知识源 / 调整检索编排**：plugins/chat.js 的 `ChatBrain.chat()` 主流程（本地快路 → 缓存 → 联网检索 → 排序 → `_reply`）；检索器本体按惯例放 core/knowledge/ 并由 runtime 装配为共享单例注入（联网搜索 websearch.js 由 config.webSearch 配置，启用后取代萌娘/维基）。
 - **新本地数据表**：core/knowledge/arkdb.js 读 + core/platform/refresher.js 下载/校验；数据文件约定见 [docs/data-format.md](docs/data-format.md)。
 - **面板新接口**：plugins/webui.js（零依赖 node:http，页面内联）。
 - **@机器人 人设与回复规则**：plugins/chat.js 的 system prompt 与 core/platform/summarizer.js 的两套 prompt。

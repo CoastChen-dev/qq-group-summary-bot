@@ -27,6 +27,9 @@
 | `report.hour` / `report.minute` | number | `9` / `0` | Scheduler（core/platform/scheduler.js，经 runtime 装配传参） | 日报触发时刻（2026-09 修复后生效；旧 `schedule.*` 死键已废弃，见备忘） |
 | `quiet.enabled` | boolean | `true` | routing（S7） | 静默时段开关 |
 | `quiet.start` / `quiet.end` | number | `0` / `8` | routing（S7） | 小时制 `[start, end)`；start>end 视为跨零点 |
+| `emojiLike.enabled` | boolean | `true` | runtime（createChatTools 装配） | LLM 工具 `react_emoji`（贴表情）开关；false 时工具回「贴表情功能未启用」 |
+| `tools.enabled` | boolean | `true` | ChatBrain（plugins/chat.js） | LLM 工具调用总开关（false 时请求不带 tools，仅纯聊天） |
+| `tools.maxRounds` | number | `3` | ChatBrain | 工具调用轮次上限（超出后末轮不带工具强制收口） |
 | `minMessages` | number | `1` | summary 插件（doSummary） | 手动总结低于该消息条数时跳过 |
 | `includeSelf` | boolean | `false` | routing（S3） | `true` 时机器人自己的消息也计入 |
 | `commands.manualSummary` | string[] | `['总结','/总结','#总结']` | summary 插件（分发带 900） | 手动总结触发关键词（剥 @ 后问题文本 includes 判定） |
@@ -37,6 +40,15 @@
 | `dataRefresh.announce` | boolean | `false` | refresh 插件 | `=== true` 才向群播报新增 6★/5★/新卡池 |
 | `dataDir` | string | `./data` | runtime（createApp 装配） | 运行数据根目录（相对路径按进程 cwd 解析） |
 | `filter.enabled` | boolean | `true` | runtime（filterMessages 包装；实现 core/platform/filter.js） | 敏感内容过滤开关（总结/日报前） |
+| `memory.enabled` | boolean | `true` | runtime（UserMemory 装配）+ memory 插件 + ChatBrain | 用户记忆总开关；false 时不加载不注入、指令回「记忆功能未启用」 |
+| `memory.file` | string | `<root>/data/user_memory.json` | UserMemory（core/platform/usermem.js） | 记忆文件路径（相对路径按项目根解析） |
+| `memory.autoExtract` | boolean | `true` | ChatBrain（_extractMemory） | 对话后自动提取记忆（`!== false` 视为开；每次回复多一次小 LLM 调用） |
+| `memory.maxFactsPerUser` / `memory.maxFactsGlobal` | number | `20` / `2000` | UserMemory | 每人 / 全局事实上限，超限丢最旧 |
+| `webSearch.enabled` | boolean | `true`（有 key 才生效） | WebSearchRetriever（core/knowledge/websearch.js） | 联网搜索开关；`apiKey` 为空时自动禁用并回落萌娘/维基 |
+| `webSearch.provider` | string | `zhipu` | WebSearchRetriever | 搜索平台：`zhipu`（智谱 Web Search）/ `bocha`（博查） |
+| `webSearch.apiKey` | string | `''` | WebSearchRetriever | 平台 API Key（必填才启用） |
+| `webSearch.count` | number | `5` | WebSearchRetriever | 返回结果条数（1–10） |
+| `webSearch.timeoutMs` | number | `5000` | WebSearchRetriever | 单次搜索超时 |
 | `webui.enabled` | boolean | `true` | webui 插件（hooks.start） | Web 面板开关 |
 | `webui.host` / `webui.port` | string/number | `127.0.0.1` / `5210` | webui 插件 | listen 地址；host 留 127.0.0.1 仅本机可访问 |
 | `webui.token` | string | `''` | webui 插件 | 面板口令；空 = 全开放；非空时要求 `Authorization: Bearer` 头或 `?token=` |
@@ -53,6 +65,8 @@
 | `llm.chatEnabled` | boolean | `true` | ChatBrain | AI 群聊开关；false 时 @ 未命中指令 → 无回复（chat 带仍消费但短路） |
 | `llm.chatHistoryLimit` | number | `12` | ChatBrain | 每群保留的上下文条数 |
 | `llm.chatConcurrency` | number | `3` | ChatBrain | LLM 请求并发上限（信号量） |
+| `llm.retrievalGate` | boolean | `true` | ChatBrain | 检索门：闲聊消息跳过通用检索（提速）；false 恢复总是检索（`!== false` 视为开） |
+| `llm.wikiTimeoutMs` / `moegirlTimeoutMs` / `wikipediaTimeoutMs` | number | `5000` | ChatBrain | 三源并行检索的单源超时上限（example 未列，代码支持） |
 | `llm.defaultReply` | string | 内置文案 | ChatBrain | LLM 调用失败时的兜底回复（照发） |
 | `llm.lingoFile` | string | `<root>/data/lingo.json` | LingoStore（core/knowledge/lingo.js） | 相对路径按 cwd 解析（与 arkdbDir/cacheFile 一致） |
 | `llm.cacheFile` | string | `<root>/data/knowledge_cache.json` | KnowledgeCache（core/knowledge/cache.js） | 同上 |

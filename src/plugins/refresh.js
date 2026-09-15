@@ -49,11 +49,12 @@ export function createRefreshPlugin(deps) {
    * 数据自动/手动刷新编排（§6.3 单一 runner，三个触发源共用）。
    * @param {string|null} [notifyGroupId=null] - 群指令触发时传群号：必向该群回执「【数据更新】…」结果消息
    *   （另在 broadcast===true 时附播报）；为 null（定时器/WebUI 触发）时仅当 broadcast 把播报广播给全部跟踪群
+   * @param {string|number|null} [atUserId=null] - 手动指令触发时传提问者 QQ：结果回执真 @ 该成员；null 纯文本
    * @returns {Promise<string>} 「【数据更新】…」结果文本（供群回执与 WebUI /api/refresh 复用）
    * 副作用：联网下载写盘 data/ark/（原子写入+旧文件 .bak 备份）、arkdb 内存热重载、
    * 更新时清 q:* 知识检索缓存（坑 3）、可能群发播报；发送失败吞掉只记日志
    */
-  async function refresh(notifyGroupId = null) {
+  async function refresh(notifyGroupId = null, atUserId = null) {
     log('[refresh] 开始更新本地数据...');
 
     // 快照旧数据（用于新增播报对比；走公开快照 API，不再直读 characters/_isOperator/gachaPools）
@@ -96,7 +97,10 @@ export function createRefreshPlugin(deps) {
 
     const msg = `【数据更新】\n成功：${updated.length ? updated.join('、') : '无'}\n未变化：${unchanged.length ? unchanged.join('、') : '无'}\n${failed.length ? '失败：' + failed.join('、') : '全部成功'}`;
     if (notifyGroupId) {
-      client.sendGroupMsg(notifyGroupId, msg).catch((e) => err(`[refresh] 通知发送失败:`, e.message));
+      const sendMsg = atUserId
+        ? client.sendGroupMsgAt(notifyGroupId, atUserId, msg)
+        : client.sendGroupMsg(notifyGroupId, msg);
+      sendMsg.catch((e) => err(`[refresh] 通知发送失败:`, e.message));
       if (announce && broadcast) {
         client.sendGroupMsg(notifyGroupId, announce).catch(() => {});
       }
@@ -124,10 +128,18 @@ export function createRefreshPlugin(deps) {
       // 手动刷新本地数据（联网更新 ArknightsGameData）——整串锚定（非包含匹配）
       if (!/^(刷新数据|更新数据|更新数据库)$/.test(t)) return null;
       log(`[group ${ctx.groupId}] 收到数据刷新指令`);
-      client.sendGroupMsg(ctx.groupId, '正在更新本地数据库，稍候…').catch(() => {});
-      refresh(ctx.groupId).catch((e) => {
+      const ack = '正在更新本地数据库，稍候…';
+      const sendAck = ctx.userId
+        ? client.sendGroupMsgAt(ctx.groupId, ctx.userId, ack)
+        : client.sendGroupMsg(ctx.groupId, ack);
+      sendAck.catch(() => {});
+      refresh(ctx.groupId, ctx.userId).catch((e) => {
         err('[refresh] 手动刷新失败:', e.message);
-        client.sendGroupMsg(ctx.groupId, `数据更新失败：${e.message}`).catch(() => {});
+        const fail = `数据更新失败：${e.message}`;
+        const sendFail = ctx.userId
+          ? client.sendGroupMsgAt(ctx.groupId, ctx.userId, fail)
+          : client.sendGroupMsg(ctx.groupId, fail);
+        sendFail.catch(() => {});
       });
       return true;
     },

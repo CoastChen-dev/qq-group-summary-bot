@@ -202,11 +202,16 @@ export function createRouting(options) {
     // 最先的插件认领并异步触发概括，路由此处不再单独判定（见 plugins/summary.js）。
     // S9 剥前导 @ 得到问题文本
     const question = extractQuestion(rec, true);
-    // S10 纯 @（问题为空）：回「@昵称 艾特Mon3tr干什么呀喵」提示并 return
+    // S10 纯 @（问题为空）：真 @ 提问者回「艾特Mon3tr干什么呀喵」提示并 return
+    //（无 user_id 的异常事件退化为文本 @昵称）
     if (!question) {
       log(`[group ${event.group_id}] 收到仅@机器人（无内容）的消息`);
       const senderName = event.sender?.card || event.sender?.nickname || '群友';
-      client.sendGroupMsg(event.group_id, `@${senderName} 艾特Mon3tr干什么呀喵`).catch((e) => err(`[group ${event.group_id}] 发送提示失败:`, e.message));
+      const tip = '艾特Mon3tr干什么呀喵';
+      const send = event.user_id
+        ? client.sendGroupMsgAt(event.group_id, event.user_id, tip)
+        : client.sendGroupMsg(event.group_id, `@${senderName} ${tip}`);
+      send.catch((e) => err(`[group ${event.group_id}] 发送提示失败:`, e.message));
       return;
     }
 
@@ -226,11 +231,16 @@ export function createRouting(options) {
       groupId: event.group_id,
       userId: event.user_id,
       userName: senderName,
+      messageId: rec.id,
       text: question,
     });
     if (typeof cmdReply === 'string') {
       log(`[group ${event.group_id}] 指令响应: ${question.slice(0, 30)}`);
-      client.sendGroupMsg(event.group_id, cmdReply).catch((e) => err(`[group ${event.group_id}] 指令发送失败:`, e.message));
+      // 真 @ 提问者发送指令回复（无 user_id 时退化为纯文本）
+      const send = event.user_id
+        ? client.sendGroupMsgAt(event.group_id, event.user_id, cmdReply)
+        : client.sendGroupMsg(event.group_id, cmdReply);
+      send.catch((e) => err(`[group ${event.group_id}] 指令发送失败:`, e.message));
     }
     return;
   }

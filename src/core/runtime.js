@@ -36,7 +36,8 @@ import { KnowledgeCache } from './knowledge/cache.js';
 import { WikiRetriever } from './knowledge/wiki.js';
 import { MoegirlRetriever } from './knowledge/moegirl.js';
 import { WikipediaRetriever } from './knowledge/wikipedia.js';
-import { ChatBrain, createChatPlugin } from '../plugins/chat.js';
+import { WebSearchRetriever } from './knowledge/websearch.js';
+import { ChatBrain, createChatPlugin, createChatTools } from '../plugins/chat.js';
 import { createSummaryPlugin } from '../plugins/summary.js';
 import { createRefreshPlugin } from '../plugins/refresh.js';
 import { createReportPlugin } from '../plugins/report.js';
@@ -108,7 +109,21 @@ export function createApp(config, overrides = {}) {
   const wiki = overrides.wiki || new WikiRetriever(llm);
   const moegirl = overrides.moegirl || new MoegirlRetriever(llm);
   const wikipedia = overrides.wikipedia || new WikipediaRetriever(llm);
-  const brain = overrides.brain || new ChatBrain({ cfg: llm, lingo, arkdb, cache, wiki, moegirl, wikipedia, usermem: memory, memoryCfg });
+  const webSearch = overrides.webSearch || new WebSearchRetriever(config.webSearch || {});
+  // 贴表情开关（emojiLike.*，默认开）：开启时给 LLM 注册 react_emoji 工具（模型决定贴不贴/贴哪个）
+  const emojiLikeEnabled = config.emojiLike?.enabled !== false;
+  // LLM 工具表（function calling，config.tools.enabled 默认开）：只读查询 + 贴表情 + 写记忆；
+  // 由 ChatBrain 在回复过程中按需调用（贴表情由 emojiLike.enabled 单独控制——关闭时不注册 react）
+  const tools = createChatTools({
+    arkdb,
+    analytics,
+    usermem: memory,
+    react: emojiLikeEnabled ? (messageId, emojiId) => client.setMsgEmojiLike(messageId, emojiId) : null,
+  });
+  const brain = overrides.brain || new ChatBrain({
+    cfg: llm, lingo, arkdb, cache, wiki, moegirl, wikipedia, webSearch, usermem: memory, memoryCfg,
+    tools, toolsCfg: config.tools || {},
+  });
 
   // 群路由相关配置常量（自 config.json 派生；groups 空数组 = 跟踪全部群）
   const trackedGroups = () => (Array.isArray(config.groups) ? config.groups : []);
@@ -257,7 +272,7 @@ export function createApp(config, overrides = {}) {
 
   return {
     config,
-    services: { dataDir, llm, store, client, summarizer, brain, lingo, arkdb, cache, wiki, moegirl, wikipedia, memory, scheduler, analytics, refresher, registry },
+    services: { dataDir, llm, store, client, summarizer, brain, lingo, arkdb, cache, wiki, moegirl, wikipedia, webSearch, memory, scheduler, analytics, refresher, registry },
     refreshData,
     getStatus,
     start,

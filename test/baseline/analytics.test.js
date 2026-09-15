@@ -205,6 +205,24 @@ describe('抽卡记录（pulls 表）', () => {
     assert.equal(analytics.myPulls(gid, 'nobody').rows.length, 0); // 他人视角为空
   });
 
+  it('mySixPulls：只取 6★、最新在前、limit 生效、跨群隔离', (t) => {
+    const { analytics } = makeAnalytics(t);
+    const gid = '10001';
+    analytics.recordPull(gid, 'u1', '张三', '池A', FOUR, '四星', false);
+    analytics.recordPull(gid, 'u1', '张三', '池A', SIX, '能天使', true);
+    analytics.recordPull(gid, 'u1', '张三', '池A', FIVE, '五星', false);
+    analytics.recordPull(gid, 'u1', '张三', '池B', SIX, '史尔特尔', false);
+    analytics.recordPull('20002', 'u1', '张三', '池C', SIX, '别群', false);
+
+    const rows = analytics.mySixPulls(gid, 'u1');
+    assert.equal(rows.length, 2);
+    assert.deepEqual(rows.map((r) => r.operator), ['史尔特尔', '能天使']); // 最新在前、只含 6★
+    assert.equal(rows[0].is_up, 0);
+    assert.equal(analytics.mySixPulls(gid, 'u1', 1).length, 1);
+    assert.equal(analytics.mySixPulls(gid, 'nobody').length, 0);
+    assert.equal(analytics.mySixPulls('20002', 'u1')[0].operator, '别群'); // 群隔离
+  });
+
   it('pulls 群隔离：同人不同群/同群不同人互不串', (t) => {
     const { analytics } = makeAnalytics(t);
     analytics.recordPull('10001', 'u1', '张三', '池A', SIX, '能天使', false);

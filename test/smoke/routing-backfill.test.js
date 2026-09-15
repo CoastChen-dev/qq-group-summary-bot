@@ -46,6 +46,7 @@ function mkRouting(over = {}) {
     },
     getGroupMsgHistory: async () => { calls.getHistory++; return { messages: over.messages ?? [] }; },
     sendGroupMsg: async () => {},
+    setMsgEmojiLike: async () => {},
   };
   const store = {
     getLastSeenTs: (gid) => seenBy[String(gid)] ?? 0,

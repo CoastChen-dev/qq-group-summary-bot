@@ -168,13 +168,31 @@ export class NapCatClient {
 
   /**
    * 发群消息（auto_escape: true——纯文本按原样转义发送，消息里的 CQ 码不会被解析；
-   * 本 bot 不做真 @，见 external-apis.md §1 用法表）。
+   * 需要真 @ 时用 sendGroupMsgAt）。
    * @param {string|number} groupId - 目标群号
    * @param {string} message - 纯文本内容
    * @returns {Promise<Object>} 发送结果（含 message_id）
    */
   sendGroupMsg(groupId, message) {
     return this.call('send_group_msg', { group_id: groupId, message, auto_escape: true });
+  }
+
+  /**
+   * 发群消息并真 @ 指定成员（OneBot 段式消息 [at, text]，被 @ 者会收到提醒）——回答提问者用
+   * （routing S10/S12 指令回复、chat 插件 LLM 回复、refresh 手动回执；broadcast 播报不加 @）。
+   * @param {string|number} groupId - 目标群号
+   * @param {string|number} userId - 被 @ 的 QQ 号
+   * @param {string} message - 纯文本内容（自动加一个前导空格）
+   * @returns {Promise<Object>} 发送结果（含 message_id）
+   */
+  sendGroupMsgAt(groupId, userId, message) {
+    return this.call('send_group_msg', {
+      group_id: groupId,
+      message: [
+        { type: 'at', data: { qq: String(userId) } },
+        { type: 'text', data: { text: ` ${message}` } },
+      ],
+    });
   }
 
   /**
@@ -185,6 +203,17 @@ export class NapCatClient {
    */
   sendPrivateMsg(userId, message) {
     return this.call('send_private_msg', { user_id: userId, message, auto_escape: true });
+  }
+
+  /**
+   * 给消息贴表情（NapCat 扩展 API `set_msg_emoji_like`，QQ 消息表情回应；routing 收到 @ 时
+   * 随机贴一个作为确认反馈）。
+   * @param {string|number} messageId - 目标消息 message_id（routing 传 store 记录的 id）
+   * @param {string|number} emojiId - 表情 ID（**Unicode 码点字符串**，如 '128077' = 👍；已实测）
+   * @returns {Promise<Object>} 调用结果（NapCat 返回 status/retcode）
+   */
+  setMsgEmojiLike(messageId, emojiId) {
+    return this.call('set_msg_emoji_like', { message_id: Number(messageId), emoji_id: String(emojiId), set: true });
   }
 
   /**

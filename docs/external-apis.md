@@ -13,8 +13,10 @@
 | 方法 | action | 参数 | 用途 |
 |---|---|---|---|
 | `getLoginInfo` | `get_login_info` | — | 回填 selfId |
-| `sendGroupMsg` | `send_group_msg` | `auto_escape: true` | 群回复（纯文本，不真 at） |
+| `sendGroupMsg` | `send_group_msg` | `auto_escape: true` | 群播报（纯文本，不 @） |
+| `sendGroupMsgAt` | `send_group_msg` | 段式 `[at, text]` | 回答提问者（真 @；S10/S12 指令回复、chat LLM 回复、refresh 手动回执） |
 | `sendPrivateMsg` | `send_private_msg` | `auto_escape: true` | 日报私聊 |
+| `setMsgEmojiLike` | `set_msg_emoji_like` | `message_id`, `emoji_id`（QQ 黄脸小数字 ID 如 `'14'`／Unicode 码点串如 `'128077'`，均实测可用）, `set: true` | LLM 工具 `react_emoji` 调用（贴表情） |
 | `getGroupInfo` | `get_group_info` | — | 日报标题取群名 |
 | `getGroupMsgHistory` | `get_group_msg_history` | `message_seq:0, count:1000` | backfill 补偿拉取 |
 
@@ -43,9 +45,27 @@ Authorization: Bearer {apiKey}
 
 错误统一为 `LLM API 错误 <status>: <body 前 N 字>`（Summarizer 500 / ChatBrain 300）。
 
-## 3. 三个 Wiki 检索器（MediaWiki 家族）
+> ChatBrain 主调用支持 **function calling（工具）**：请求带 `tools` 定义，模型返回 `tool_calls` 时由
+> `_runTool` 本地执行并回填结果继续生成（最多 `tools.maxRounds` 轮，末轮不带工具收口）。
+> 另有两次 fire-and-forget 辅助小调用（同一端点、经 fetchRetry，失败均静默回退、不影响回复时序）：
+> ① **用户记忆自动提取** `_extractMemory`（temperature 0.2、max_tokens 200、30s×1 重试，输出 JSON 数组）。
+
+## 3. 三个 Wiki 检索器（MediaWiki 家族）与联网搜索
 
 共同点：均为"search → 取页内容 → 关键词定位截段 → `【标题】…` 拼接"，输出 `{context, sources, scoreSize}`；请求间有最小间隔节流。
+
+> **提速（2026-09，ChatBrain）**：三源检索**并行执行**（`Promise.all`，单源失败/超时各自兜 null），单源超时 5s（`llm.wikiTimeoutMs`/`moegirlTimeoutMs`/`wikipediaTimeoutMs`）；且默认开启**检索门**（`llm.retrievalGate`）——闲聊消息（无问句特征）跳过通用检索（萌娘/维基）直接进 LLM，方舟相关问题仍检索 PRTS.Wiki。
+
+### 联网搜索（可选替代源，config.webSearch）
+
+DeepSeek API **不支持服务端联网搜索**（Responses API 的 `web_search` 等内置工具被忽略，只支持 function 工具），故联网检索走自建 `WebSearchRetriever`（core/knowledge/websearch.js）：配置 `webSearch.apiKey` 后，检索门放行的通用检索**改走搜索 API**（不再调用萌娘/维基），输出 `【联网搜索】` 上下文段参与统一评分（trust 70）。
+
+| provider | 端点 | 请求 | 响应取值 |
+|---|---|---|---|
+| `zhipu`（默认） | `https://open.bigmodel.cn/api/paas/v4/web_search` | `{search_engine:'search_std', search_query, count}`，Bearer | `search_result[].{title,link,content}` |
+| `bocha` | `https://api.bochaai.com/v1/web-search` | `{query, summary:true, count}`，Bearer | `data.webPages.value[].{name,url,summary}` |
+
+单次超时 5s ×1 重试；失败/无结果返回空（ChatBrain 按空处理，不抛错）。
 
 | | WikiRetriever (PRTS.Wiki) | MoegirlRetriever (萌娘百科) | WikipediaRetriever (维基) |
 |---|---|---|---|

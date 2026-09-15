@@ -27,6 +27,7 @@
     "cacheTtlHours": 168,
     "arkdbDir": "./data/ark",
     "chatConcurrency": 3,
+    "retrievalGate": true,
     "wikipediaEnabled": false,
     "wikipediaApiUrl": "https://zh.wikipedia.org/w/api.php",
     "wikipediaMaxCharPerPage": 2000,
@@ -45,6 +46,19 @@
     "enabled": true,
     "start": 0,
     "end": 8
+  },
+  "emojiLike": {
+    "enabled": true
+  },
+  "tools": {
+    "enabled": true,
+    "maxRounds": 3
+  },
+  "webSearch": {
+    "enabled": true,
+    "provider": "zhipu",
+    "apiKey": "",
+    "count": 5
   },
   "backfill": {
     "maxHours": 72

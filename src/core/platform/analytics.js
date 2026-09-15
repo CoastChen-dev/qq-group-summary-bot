@@ -272,6 +272,21 @@ export class Analytics {
   }
 
   /**
+   * 某人最近抽到的 N 个 6★ 记录（指令「抽卡记录」调用；最新在前，id DESC）。
+   * @param {string} groupId - 群号
+   * @param {string} userId - QQ 号
+   * @param {number} [limit=10] - 条数上限
+   * @returns {Object[]} 明细数组 [{pool_name, star, operator, is_up, time}]；无记录为空数组
+   */
+  mySixPulls(groupId, userId, limit = 10) {
+    return this.db.prepare(
+      `SELECT pool_name, star, operator, is_up, time FROM pulls
+       WHERE group_id = ? AND user_id = ? AND star LIKE '%★★★★★★%'
+       ORDER BY id DESC LIMIT ?`
+    ).all(String(groupId), String(userId), limit);
+  }
+
+  /**
    * 群内「欧气榜」行数据（指令插件取到后拼榜单一并发群）。
    * 排序：六星数降序 → 总抽数降序，取前 10。
    * @param {string} groupId - 群号

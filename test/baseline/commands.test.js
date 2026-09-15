@@ -208,19 +208,19 @@ describe('卡池与抽卡（规则 9-11）', () => {
     assert.equal(withRand([0.01, 0.4, 0], () => tryCommand(ctx, '单抽 99')).split('\n')[0], '【单抽·深池纪念】（6★UP：能天使；5★UP：阿米娅）');
   });
 
-  it('抽卡记录 [N]：明细+累计统计；欧气榜按 6★ 排行', (t) => {
+  it('抽卡记录 [N]：最近 N 个 6★ 明细+累计统计；欧气榜按 6★ 排行', (t) => {
     const ctx = makeCtx();
     const seq = Array(30).fill(0).flatMap(() => [0.01, 0.4, 0]);
     withRand(seq, () => tryCommand(ctx, '十连'));
 
     const mine = tryCommand(ctx, '抽卡记录');
-    assert.ok(mine.startsWith('【你的抽卡记录（最近 10 抽）】'));
+    assert.ok(mine.startsWith('【最近抽到的 6★（10 个）】'));
     assert.equal(mine.split('\n').length, 13); // 头 + 10 明细 + 空行 + 累计行
     assert.ok(mine.endsWith('累计 10 抽 | 6★ ×10 | 5★ ×0'));
-    assert.ok(mine.includes('★★★★★★ 能天使 ↑UP（深池纪念）'));
+    assert.ok(mine.includes('1. 能天使 ↑UP（深池纪念）'));
 
-    assert.ok(tryCommand(ctx, '抽卡记录 3').startsWith('【你的抽卡记录（最近 3 抽）】'));
-    assert.ok(tryCommand(ctx, '抽卡统计 99').startsWith('【你的抽卡记录（最近 10 抽）】')); // 收敛 1-50，总量不足时取实际
+    assert.ok(tryCommand(ctx, '抽卡记录 3').startsWith('【最近抽到的 6★（3 个）】'));
+    assert.ok(tryCommand(ctx, '抽卡统计 99').startsWith('【最近抽到的 6★（10 个）】')); // 收敛 1-50，总量不足时取实际
 
     const luck = tryCommand(ctx, '谁最欧');
     assert.equal(luck, '【本群欧气榜（按6★数量）】\n1. 测试群友：10 个6★ / 10 抽');
@@ -228,6 +228,13 @@ describe('卡池与抽卡（规则 9-11）', () => {
     // 无 analytics 的守卫
     const bare = makeCtx({ withAnalytics: false });
     assert.equal(tryCommand(bare, '谁最欧'), '欧气榜功能未启用');
+  });
+
+  it('抽卡记录：没出过 6★ 时如实提示（无记录 / 有记录但无 6★）', (t) => {
+    const ctx = makeCtx();
+    assert.equal(tryCommand(ctx, '抽卡记录'), '你还没有抽卡记录，试试「十连」吧');
+    ctx.analytics.recordPull('10001', 'u1', '测试群友', '深池纪念', '★★★★', '波登可', false);
+    assert.equal(tryCommand(ctx, '抽卡记录'), '还没有抽到过 6★（累计 1 抽），再试试吧~');
   });
 });
 

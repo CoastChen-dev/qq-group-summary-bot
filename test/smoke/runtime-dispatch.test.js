@@ -52,6 +52,8 @@ function mkApp(cfgOverrides = {}, svcOverrides = {}) {
     connect: () => {},
     close: () => { calls.close++; },
     sendGroupMsg: async (gid, msg) => sent.push({ gid, msg }),
+    sendGroupMsgAt: async (gid, uid, msg) => sent.push({ gid, at: String(uid), msg }),
+    setMsgEmojiLike: async () => {},
     getGroupInfo: async () => ({ group_name: '测试群' }),
     sendPrivateMsg: async () => {},
   };
@@ -61,7 +63,7 @@ function mkApp(cfgOverrides = {}, svcOverrides = {}) {
         .map((s) => (s.type === 'at' ? `@${s.data?.qq}` : s.type === 'text' ? s.data?.text || '' : ''))
         .join('').trim();
       if (!text) return null;
-      return { text, time: Math.floor(Date.now() / 1000) };
+      return { id: 'm1', text, time: Math.floor(Date.now() / 1000) };
     },
     collectSince: () => [],
     getLastSummaryAt: () => 0,
@@ -80,7 +82,9 @@ function mkApp(cfgOverrides = {}, svcOverrides = {}) {
     lookup: () => null,
     entries: new Map(),
   };
-  const brain = { chat: async (gid, name, q, uid) => { calls.brainChat = { gid, name, q, uid }; return '回复内容'; } };
+  const brain = {
+    chat: async (gid, name, q, uid, opts) => { calls.brainChat = { gid, name, q, uid, messageId: opts?.messageId }; return '回复内容'; },
+  };
 
   const app = createApp({
     napcat: { wsUrl: 'ws://127.0.0.1:3001', selfId: 10001, accessToken: '' },
@@ -122,8 +126,8 @@ describe('createApp 全链（P3 五插件装配面）', () => {
     const { send, sent, calls } = mkApp();
     send(atEvent('波登可是谁'));
     await tick();
-    assert.deepEqual(calls.brainChat, { gid: 9, name: '博士', q: '波登可是谁', uid: 555 });
-    assert.deepEqual(sent, [{ gid: 9, msg: '回复内容' }]);
+    assert.deepEqual(calls.brainChat, { gid: 9, name: '博士', q: '波登可是谁', uid: 555, messageId: 'm1' });
+    assert.deepEqual(sent, [{ gid: 9, at: '555', msg: '回复内容' }]); // 真 @ 提问者
   });
 
   it('总结关键词：dispatch 返回 true 不发送（异步消费、无字符串文案）', async () => {
@@ -140,7 +144,10 @@ describe('createApp 全链（P3 五插件装配面）', () => {
     send(atEvent('刷新数据'));
     await tick(40);
     assert.equal(calls.brainChat, null);
-    assert.deepEqual(sent.map((s) => s.msg), ['正在更新本地数据库，稍候…', '【数据更新】\n成功：无\n未变化：无\n全部成功']);
+    assert.deepEqual(sent, [
+      { gid: 9, at: '555', msg: '正在更新本地数据库，稍候…' },
+      { gid: 9, at: '555', msg: '【数据更新】\n成功：无\n未变化：无\n全部成功' },
+    ]);
   });
 
   it('确定性指令（学习）返回 string：路由层发送、指令日志路径不变', async () => {
@@ -149,13 +156,13 @@ describe('createApp 全链（P3 五插件装配面）', () => {
     await tick();
     assert.deepEqual(calls.learn, [['轮椅轴', '挂机套路']]);
     assert.equal(calls.brainChat, null);
-    assert.deepEqual(sent, [{ gid: 9, msg: '已学习词条：轮椅轴 → 挂机套路' }]);
+    assert.deepEqual(sent, [{ gid: 9, at: '555', msg: '已学习词条：轮椅轴 → 挂机套路' }]);
   });
 
   it('S10 纯 @（空问题）：固定提示回复不受插件化影响', async () => {
     const { send, sent } = mkApp();
     send(atEvent(''));
-    assert.deepEqual(sent, [{ gid: 9, msg: '@博士 艾特Mon3tr干什么呀喵' }]);
+    assert.deepEqual(sent, [{ gid: 9, at: '555', msg: '艾特Mon3tr干什么呀喵' }]); // 真 @ 提问者
   });
 
   it('紧贴 @ 无空格的整串不触发任何插件：落 S10 空@ 提示（2026-09 决策，见 architecture §8 坑 11）', async () => {
@@ -174,9 +181,16 @@ describe('createApp 全链（P3 五插件装配面）', () => {
         { type: 'text', data: { text: '总结' } }, // 无前导空格：紧贴 at 段
       ],
     });
-    assert.deepEqual(sent, [{ gid: 9, msg: '@博士 艾特Mon3tr干什么呀喵' }]);
+    assert.deepEqual(sent, [{ gid: 9, at: '555', msg: '艾特Mon3tr干什么呀喵' }]);
     assert.equal(calls.summarize, 0); // 不回显总结
     assert.equal(calls.brainChat, null);
+  });
+
+  it('工具装配：createApp 为 ChatBrain 注入工具表（贴表情/查询/记忆）', () => {
+    const { app } = mkApp({}, { brain: null }); // 走真实 ChatBrain（构造零网络副作用）
+    const names = app.services.brain.tools.map((t) => t.name);
+    assert.deepEqual(names, ['react_emoji', 'query_operator', 'query_relic', 'query_gacha', 'query_group_stats', 'query_user_memory', 'remember']);
+    assert.equal(app.services.brain.toolsEnabled, true);
   });
 
   it('start()/stop()：webui.enabled=false 不起面板，stop 走 registry 逆序并关 client', () => {

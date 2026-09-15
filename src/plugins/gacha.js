@@ -52,15 +52,20 @@ export function createGachaPlugin() {
         return '【当前卡池】\n' + lines.join('\n') + '\n\n用法：十连 1 / 单抽 卡池名关键字';
       }
 
-      // 抽卡记录/我的抽卡/抽卡统计 [N]：最近 N 抽明细+累计统计（默认 10，收敛到 1–50）；
+      // 抽卡记录/我的抽卡/抽卡统计 [N]：最近抽到的 N 个 6★ 明细 + 累计统计（默认 10，收敛到 1–50）；
       // 缺 analytics/groupId/userId 任一 → 「抽卡记录功能未启用」（本规则必须先于下方单抽/十连规则）
       if ((m = t.match(/^(抽卡记录|我的抽卡|抽卡统计)\s*(\d*)$/))) {
         if (!ctx.analytics || ctx.groupId === undefined || ctx.userId === undefined) return '抽卡记录功能未启用';
         const limit = Math.min(Math.max(parseInt(m[2] || '10', 10) || 10, 1), 50);
-        const { rows, total, six, five } = ctx.analytics.myPulls(ctx.groupId, ctx.userId, limit);
-        if (!rows.length) return '你还没有抽卡记录，试试「十连」吧';
-        const list = rows.map((r) => `${r.star} ${r.operator}${r.is_up ? ' ↑UP' : ''}（${r.pool_name}）`).join('\n');
-        return `【你的抽卡记录（最近 ${rows.length} 抽）】\n${list}\n\n累计 ${total} 抽 | 6★ ×${six} | 5★ ×${five}`;
+        const rows = ctx.analytics.mySixPulls(ctx.groupId, ctx.userId, limit);
+        const { total, six, five } = ctx.analytics.myPulls(ctx.groupId, ctx.userId, 1);
+        if (!rows.length) {
+          return total > 0
+            ? `还没有抽到过 6★（累计 ${total} 抽），再试试吧~`
+            : '你还没有抽卡记录，试试「十连」吧';
+        }
+        const list = rows.map((r, i) => `${i + 1}. ${r.operator}${r.is_up ? ' ↑UP' : ''}（${r.pool_name}）`).join('\n');
+        return `【最近抽到的 6★（${rows.length} 个）】\n${list}\n\n累计 ${total} 抽 | 6★ ×${six} | 5★ ×${five}`;
       }
       // 整串「谁最欧/群欧皇/欧气榜」：本群欧气排行（按 6★ 数量）；守卫只查 analytics 与 groupId
       if (t === '谁最欧' || t === '群欧皇' || t === '欧气榜') {
