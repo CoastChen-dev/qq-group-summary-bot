@@ -16,6 +16,21 @@ QQ 群聊机器人（NapCat / OneBot 11 / WS），Node ESM，LLM 生成群聊概
 - 启动需要 `config.json` 里 `llm.apiKey`（或 `LLM_API_KEY` 环境变量），缺失即 exit(1)；连不上 NapCat 只打重连日志不退出。
 - 改代码前必读：[docs/architecture.md](docs/architecture.md)（§4 消息路由链、§6 三个后台流程、§8 已知坑）。
 
+## 风控安全与调试隔离（重要）
+
+QQ 对自动化账号有阶梯式风控（提示 → 限制 → 冻结 7/30 天 → 永久）。本仓库曾因调试期批量调用吃过 **7 天冻结**（2026-09），以下纪律必须遵守：
+
+1. **禁止对真机账号做批量接口探测**：任何"全量测试/枚举调用"（表情 ID 全量探测、循环拉历史、批量发消息等）只能在隔离环境或测试账号上做；真机只跑正常业务量。
+2. **调试不连生产账号**：改完先跑 `npm test`（纯本地、零网络）；确需真机验证时一次性部署后观察，禁止连续重启联调。
+3. **重启纪律**：每次重启都会触发 backfill 评估（历史上单日 24 次重启 + 133 次历史拉取是风控直接诱因）；开发期用测试配置，避免频繁启动生产实例。
+4. **高风险接口清单**（改动前评估频率）：`get_group_msg_history`（backfill）、`set_msg_emoji_like`（贴表情）、`send_group_msg`（发送）。
+5. **降险机制不得回退**（改相关代码时保持）：
+   - backfill：离线 < `backfill.minOfflineMinutes`（默认 10 分钟）整体跳过；单群水位 < 5 分钟跳过；单群 `count: 100`；群间错峰 `backfillStaggerMs`（默认 800ms）
+   - 重连：指数退避 3s→60s 封顶（core/platform/napcat.js）
+   - 贴表情：同群冷却 `emojiLike.cooldownSeconds`（默认 60s）
+   - 出站内容：chat 插件发送前 `isSensitive` 兜底替换（命中即换安全文案）
+6. **账号侧**：务必用小号；被风控后按 README「降低风控风险」恢复（手机验证 → 等 1–7 天 → 换网络），期间禁止反复扫码硬试。
+
 ## 代码规范（vibe house style）
 
 1. **注释**：每个文件顶部有"作用 + 导出 + 实例化点 + 读写数据"头注释；每个 `export` 符号与类公开方法前有中文 JSDoc（`@param`/`@returns`/副作用）。细节与示例见 [docs/index.md](docs/index.md) 的"源码注释规范"——**新代码必须遵守**，旧代码缺注释时顺手补上。

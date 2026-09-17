@@ -25,7 +25,9 @@ import { fmtFull } from './platform/store.js';
  *   state 共享可变对象 { selfId, ready, backfillDone, wsConnected }（S1/S3/backfill 读写，
  *   runtime 侧 isReady/getStatus 读同一对象）；includeSelf（S3 机器人自身消息）、
  *   tracksGroup（S4 群白名单判定）、trackedGroups（backfill 群集合，空数组 = 全部群）、
- *   quietEnabled/quietStart/quietEnd（S7 静默时段）、backfillMaxHours（sinceTs 兜底窗口）
+ *   quietEnabled/quietStart/quietEnd（S7 静默时段）、backfillMaxHours（sinceTs 兜底窗口）、
+ *   backfillStaggerMs（backfill 群间错峰延迟，默认 800ms，风控降险；测试传 0 关闭）、
+ *   backfillMinOfflineMinutes（离线短于该分钟数则跳过补拉，默认 10，风控降险）
  * @returns {{onEvent: Function, getAllGroupIds: Function, backfillHistory: Function}}
  *   onEvent 挂 client.onEvent（预载后）；getAllGroupIds 注入 report 插件；backfillHistory 由
  *   onEvent 的 S1 connect 分支调用（仅此一次），runtime 不再持有
@@ -34,7 +36,7 @@ export function createRouting(options) {
   const {
     store, analytics, client, registry, lingo, arkdb, memory, state,
     includeSelf, tracksGroup, trackedGroups,
-    quietEnabled, quietStart, quietEnd, backfillMaxHours,
+    quietEnabled, quietStart, quietEnd, backfillMaxHours, backfillStaggerMs = 800, backfillMinOfflineMinutes = 10,
   } = options;
 
   /**
@@ -101,15 +103,33 @@ export function createRouting(options) {
     if (!state.ready || state.backfillDone) return;
     state.backfillDone = true;
     const nowSec = Math.floor(Date.now() / 1000);
+    // 风控降险（2026-09）：先判断「上次在线距今」——短暂重启（< backfillMinOfflineMinutes）
+    // 不补拉历史，避免调试/频繁重启时反复触发 get_group_msg_history；真实长时间离线才补偿
+    const lastConnectedAt = store.getLastConnectedAt ? store.getLastConnectedAt() : 0;
+    if (store.setLastConnectedAt) store.setLastConnectedAt(nowSec);
+    const offlineSec = lastConnectedAt ? nowSec - lastConnectedAt : Number.MAX_SAFE_INTEGER;
+    if (offlineSec < backfillMinOfflineMinutes * 60) {
+      log(`[backfill] 距上次在线仅 ${Math.max(1, Math.round(offlineSec / 60))} 分钟（< ${backfillMinOfflineMinutes}），跳过补拉（风控降险）`);
+      return;
+    }
     const maxHours = backfillMaxHours;
     const maxAgo = nowSec - maxHours * 3600;
     const groups = trackedGroups().length > 0 ? trackedGroups() : await getAllGroupIds();
 
     log(`[backfill] 启动后补偿拉取：共 ${groups.length} 个群（各群独立起点水位）`);
+    let pulled = 0;
     for (const gid of groups) {
+      const sinceTs = Math.max(store.getLastSeenTs(gid), maxAgo);
+      // 风控降险（2026-09）：水位较新（5 分钟内）的群跳过补拉——避免频繁重启时对全部群
+      // 反复拉历史（get_group_msg_history 是高风险接口）；短暂缺口由连上后的实时消息流覆盖
+      if (nowSec - sinceTs < 300) {
+        log(`[backfill] 群 ${gid} 水位较新（${fmtFull(new Date(sinceTs * 1000))}），跳过补拉`);
+        continue;
+      }
+      if (pulled > 0 && backfillStaggerMs > 0) await new Promise((r) => setTimeout(r, backfillStaggerMs)); // 群间错峰，降低连续拉历史的风控风险
+      pulled++;
       try {
-        const sinceTs = Math.max(store.getLastSeenTs(gid), maxAgo);
-        const resp = await client.getGroupMsgHistory(gid, { messageSeq: 0, count: 1000 });
+        const resp = await client.getGroupMsgHistory(gid, { messageSeq: 0, count: 100 });
         const msgs = resp?.messages ?? resp?.data ?? [];
         let added = 0;
         let earliest = 0;

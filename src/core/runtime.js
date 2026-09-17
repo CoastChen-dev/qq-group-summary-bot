@@ -119,6 +119,7 @@ export function createApp(config, overrides = {}) {
     analytics,
     usermem: memory,
     react: emojiLikeEnabled ? (messageId, emojiId) => client.setMsgEmojiLike(messageId, emojiId) : null,
+    emojiCooldownMs: Math.max(0, Number(config.emojiLike?.cooldownSeconds ?? 60)) * 1000, // 同群贴表情冷却（风控降险）
   });
   const brain = overrides.brain || new ChatBrain({
     cfg: llm, lingo, arkdb, cache, wiki, moegirl, wikipedia, webSearch, usermem: memory, memoryCfg,
@@ -165,6 +166,7 @@ export function createApp(config, overrides = {}) {
     includeSelf, tracksGroup, trackedGroups,
     quietEnabled, quietStart, quietEnd,
     backfillMaxHours: config.backfill?.maxHours ?? 72,
+    backfillMinOfflineMinutes: config.backfill?.minOfflineMinutes ?? 10,
   });
   const summaryPlugin = createSummaryPlugin({
     store, summarizer, client, filterMessages,

@@ -25,13 +25,16 @@ export class NapCatClient {
    * @param {Object} [opts={}] - 可选配置
    * @param {number} [opts.selfId=0] - 机器人自身 QQ（未回填前为 0，routing S1 connect 后 getLoginInfo 回填）
    * @param {string} [opts.accessToken=''] - 连接鉴权 token；非空时拼 ?access_token= 查询参数
-   * @param {number} [opts.reconnectDelay=3000] - 断线自动重连间隔（ms）
+   * @param {number} [opts.reconnectDelay=3000] - 断线自动重连初始间隔（ms；指数退避起点）
+   * @param {number} [opts.maxReconnectDelay=60000] - 退避上限（ms）
    */
   constructor(url, opts = {}) {
     this.url = url;
     this.selfId = opts.selfId ?? 0;
     this.accessToken = opts.accessToken ?? '';
     this.reconnectDelay = opts.reconnectDelay ?? 3000;
+    this.maxReconnectDelay = opts.maxReconnectDelay ?? 60000;
+    this._curDelay = this.reconnectDelay; // 当前退避延迟（连上复位、每次失败翻倍）
     // 当前 WS 连接（未连接或正在等待重连期间为 null）
     this.ws = null;
     // 出站调用序号：每次 call 自增一次，作为该次调用的 echo 关联键
@@ -59,8 +62,8 @@ export class NapCatClient {
 
   /**
    * 建立（或重连）WS 连接并挂接 open/message/error/close 处理器。
-   * open → 合成并派发 lifecycle/connect 事件；close 且未被 close() 关停 →
-   * reconnectDelay 后递归重连（重复调用本方法即为一次重连）。
+   * open → 合成并派发 lifecycle/connect 事件并复位退避；close 且未被 close() 关停 →
+   * 按当前退避延迟（3s 起、每次失败翻倍、上限 60s）重连（重复调用本方法即为一次重连）。
    * @returns {void}
    * 副作用: 打开 WS 连接；断线时安排自动重连定时器
    */
@@ -72,6 +75,7 @@ export class NapCatClient {
     this.ws = new WebSocket(wsUrl);
     this.ws.on('open', () => {
       log(`[napcat] 已连接 ${wsUrl}`);
+      this._curDelay = this.reconnectDelay; // 连上即复位退避
       this.emit({ post_type: 'meta_event', meta_event_type: 'lifecycle', sub_type: 'connect' });
     });
     this.ws.on('message', (data) => this._onMessage(data));
@@ -81,8 +85,11 @@ export class NapCatClient {
       // 合成 lifecycle/disconnect（与 connect 同例）：routing S1 收到后复位 wsConnected，
       // 状态页不再显示断线「在线」假象（2026-09 立项修复，见 architecture §8 坑 2）
       this.emit({ post_type: 'meta_event', meta_event_type: 'lifecycle', sub_type: 'disconnect' });
-      log(`[napcat] 连接断开，${this.reconnectDelay / 1000}s 后重连...`);
-      setTimeout(() => this.connect(), this.reconnectDelay);
+      // 风控降险（2026-09）：指数退避（3s→6s→12s→…→60s 封顶）——NapCat/账号长时间离线时
+      // 不再每 3s 高频重试（曾出现单日 1.5 万次重连的异常连接模式）
+      log(`[napcat] 连接断开，${this._curDelay / 1000}s 后重连...`);
+      setTimeout(() => this.connect(), this._curDelay);
+      this._curDelay = Math.min(this._curDelay * 2, this.maxReconnectDelay);
     });
   }
 

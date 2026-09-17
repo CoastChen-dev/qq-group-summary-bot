@@ -109,6 +109,18 @@ describe('ChatBrain 工具调用（function calling）', () => {
     assert.equal(reacted.length, 1); // 解析失败不调用 react
   });
 
+  it('createChatTools：同群贴表情冷却（风控降险）', async () => {
+    const reacted = [];
+    const reactTool = createChatTools({ react: async (mid, id) => { reacted.push(id); }, emojiCooldownMs: 60000 })
+      .find((t) => t.name === 'react_emoji');
+    assert.equal(await reactTool.handler({ emoji: '赞' }, { messageId: 'm1', groupId: 'g1' }), '已给当前消息贴上表情：赞');
+    const second = await reactTool.handler({ emoji: '吃瓜' }, { messageId: 'm2', groupId: 'g1' });
+    assert.ok(second.includes('刚贴过表情'), `冷却期应提示: ${second}`);
+    assert.equal(reacted.length, 1); // 冷却期内不再调用 react
+    assert.equal(await reactTool.handler({ emoji: '吃瓜' }, { messageId: 'm3', groupId: 'g2' }), '已给当前消息贴上表情：吃瓜'); // 他群不受影响
+    assert.equal(reacted.length, 2);
+  });
+
   it('createChatTools：react 未启用 / 无 messageId 的守卫', async () => {
     const off = createChatTools({ react: null }).find((t) => t.name === 'react_emoji');
     assert.equal(await off.handler({ emoji: '赞' }, { messageId: 'm1' }), '贴表情功能未启用');

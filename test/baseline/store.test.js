@@ -174,6 +174,19 @@ describe('MessageStore 实时落盘（addMessage）', () => {
     assert.equal(store2.getLastSeenTs('gB'), 700);
   });
 
+  it('lastConnectedAt 运行时状态：读写往返、跨实例恢复、损坏为 0（backfill 风控降险用）', (t) => {
+    const dir = makeTmp();
+    const store = new MessageStore(dir);
+    assert.equal(store.getLastConnectedAt(), 0); // 从未记录 = 0
+
+    store.setLastConnectedAt(1234567890);
+    assert.equal(store.getLastConnectedAt(), 1234567890);
+    assert.equal(new MessageStore(dir).getLastConnectedAt(), 1234567890); // 落盘恢复
+
+    fs.writeFileSync(path.join(dir, 'state', 'runtime.json'), '{broken');
+    assert.equal(new MessageStore(dir).getLastConnectedAt(), 0); // 损坏按 0
+  });
+
   it('lastSeen/lastSummaryAt 状态文件损坏一律按空/0 降级', (t) => {
     const dir = makeTmp();
     fs.mkdirSync(path.join(dir, 'state'), { recursive: true });

@@ -34,7 +34,7 @@ const flush = async () => {
 function mkRouting(over = {}) {
   const state = { selfId: 0, ready: false, backfillDone: false, wsConnected: false };
   const seenBy = over.seenByGroup ?? {}; // 各群水位（坑 9：backfill 起点按群读）
-  const calls = { getHistory: 0, added: [], recorded: [], lastSeenSet: [] };
+  const calls = { getHistory: 0, historyGids: [], added: [], recorded: [], lastSeenSet: [], connectedSet: [] };
   const client = {
     call: async () => {
       if (over.groupListError) throw new Error('get_group_list 失败');
@@ -44,7 +44,7 @@ function mkRouting(over = {}) {
       if (over.loginError) throw new Error('get_login_info 失败');
       return { user_id: over.selfIdResult ?? 424242 };
     },
-    getGroupMsgHistory: async () => { calls.getHistory++; return { messages: over.messages ?? [] }; },
+    getGroupMsgHistory: async (gid) => { calls.getHistory++; calls.historyGids.push(gid); return { messages: over.messages ?? [] }; },
     sendGroupMsg: async () => {},
     setMsgEmojiLike: async () => {},
   };
@@ -52,6 +52,8 @@ function mkRouting(over = {}) {
     getLastSeenTs: (gid) => seenBy[String(gid)] ?? 0,
     addHistoryMessage: (gid, m) => { calls.added.push([gid, m]); return { text: '历史消息', time: m.time }; }, // 恒真值 = 新增
     setLastSeenTs: (gid, t) => { calls.lastSeenSet.push([gid, t]); },
+    getLastConnectedAt: () => over.lastConnectedAt ?? 0,
+    setLastConnectedAt: (t) => calls.connectedSet.push(t),
     trackedGroupIds: () => [111, 222],
   };
   const analytics = { record: (gid, rec) => calls.recorded.push([gid, rec]) };
@@ -65,6 +67,7 @@ function mkRouting(over = {}) {
     trackedGroups: () => over.tracked ?? [],
     quietEnabled: false, quietStart: 0, quietEnd: 8,
     backfillMaxHours: over.backfillMaxHours ?? 72,
+    backfillStaggerMs: 0, // 测试关闭群间错峰（生产默认 800ms）
   });
   return { routing, state, client, calls };
 }
@@ -152,6 +155,33 @@ describe('routing：S1 connect → selfId 回填 + backfill 单次执行', () =>
       [[1, 'new'], [2, 'old'], [2, 'new']]);
     // 每群独立 setLastSeenTs（各取批内最新 time）
     assert.deepEqual(calls.lastSeenSet, [[1, now], [2, now]]);
+  });
+
+  it('backfill 风控降险：水位较新（5 分钟内）的群跳过补拉，只拉有缺口的群', async () => {
+    const now = Math.floor(Date.now() / 1000);
+    const { routing, calls } = mkRouting({
+      tracked: [1, 2],
+      seenByGroup: { 1: now - 60, 2: now - 3600 }, // 1 群 1 分钟前（新）→ 跳过；2 群 1 小时前 → 补拉
+      messages: [{ message_id: 'a', time: now }],
+    });
+    routing.onEvent(connectEvent());
+    await flush();
+    assert.deepEqual(calls.historyGids, [2]); // 只对群 2 调了 get_group_msg_history
+    assert.deepEqual(calls.added.map(([gid]) => gid), [2]);
+  });
+
+  it('backfill 风控降险：距上次在线 < 10 分钟（短暂重启）整体跳过补拉', async () => {
+    const now = Math.floor(Date.now() / 1000);
+    const { routing, calls } = mkRouting({
+      tracked: [7],
+      lastConnectedAt: now - 60, // 1 分钟前还在线 → 判定为短暂重启
+      messages: [{ message_id: 'a', time: now }],
+    });
+    routing.onEvent(connectEvent());
+    await flush();
+    assert.equal(calls.getHistory, 0); // 未调 get_group_msg_history
+    assert.equal(calls.added.length, 0);
+    assert.equal(calls.connectedSet.length, 1); // 本次在线时刻已记录（供下次判断）
   });
 });
 

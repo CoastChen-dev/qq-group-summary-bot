@@ -48,7 +48,8 @@
     "end": 8
   },
   "emojiLike": {
-    "enabled": true
+    "enabled": true,
+    "cooldownSeconds": 60
   },
   "tools": {
     "enabled": true,
@@ -61,7 +62,8 @@
     "count": 5
   },
   "backfill": {
-    "maxHours": 72
+    "maxHours": 72,
+    "minOfflineMinutes": 10
   },
   "dataRefresh": {
     "enabled": true,

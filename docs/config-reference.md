@@ -28,12 +28,14 @@
 | `quiet.enabled` | boolean | `true` | routing（S7） | 静默时段开关 |
 | `quiet.start` / `quiet.end` | number | `0` / `8` | routing（S7） | 小时制 `[start, end)`；start>end 视为跨零点 |
 | `emojiLike.enabled` | boolean | `true` | runtime（createChatTools 装配） | LLM 工具 `react_emoji`（贴表情）开关；false 时工具回「贴表情功能未启用」 |
+| `emojiLike.cooldownSeconds` | number | `60` | runtime（createChatTools 装配） | 同群贴表情冷却秒数（风控降险；0 = 不限） |
 | `tools.enabled` | boolean | `true` | ChatBrain（plugins/chat.js） | LLM 工具调用总开关（false 时请求不带 tools，仅纯聊天） |
 | `tools.maxRounds` | number | `3` | ChatBrain | 工具调用轮次上限（超出后末轮不带工具强制收口） |
 | `minMessages` | number | `1` | summary 插件（doSummary） | 手动总结低于该消息条数时跳过 |
 | `includeSelf` | boolean | `false` | routing（S3） | `true` 时机器人自己的消息也计入 |
 | `commands.manualSummary` | string[] | `['总结','/总结','#总结']` | summary 插件（分发带 900） | 手动总结触发关键词（剥 @ 后问题文本 includes 判定） |
 | `backfill.maxHours` | number | `72` | routing backfillHistory（core/routing.js） | 每群 lastSeen 的兜底上限；实际从该群 lastSeen 时刻起拉（按群水位，坑 9 修复后） |
+| `backfill.minOfflineMinutes` | number | `10` | routing backfillHistory | 距上次在线短于该分钟数（短暂重启）时**整体跳过**补拉（风控降险） |
 | `dataRefresh.enabled` | boolean | `true` | refresh 插件（hooks.start 定时器） | 数据定期更新总开关（`!== false` 视为开） |
 | `dataRefresh.intervalHours` | number | `24` | refresh 插件 | 自动刷新间隔 |
 | `dataRefresh.firstDelayMinutes` | number | `30` | refresh 插件 | 首次刷新延迟（启动后） |

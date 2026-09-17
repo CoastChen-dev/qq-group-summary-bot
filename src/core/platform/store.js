@@ -133,6 +133,40 @@ export class MessageStore {
     return path.join(this.stateDir, 'lastSeen.json');
   }
 
+  // 运行时状态文件路径：data/state/runtime.json（全局非按群；目前只存 lastConnectedAt）
+  _runtimeFile() {
+    return path.join(this.stateDir, 'runtime.json');
+  }
+
+  /**
+   * 读上次成功连接（WS connect）时刻——backfill 用它判断本次是否值得拉历史
+   * （2026-09 风控降险：短暂重启不补拉，见 core/routing.js backfillHistory）。
+   * @returns {number} 秒级时间戳；从未记录 / 文件损坏为 0
+   */
+  getLastConnectedAt() {
+    try {
+      const data = JSON.parse(fs.readFileSync(this._runtimeFile(), 'utf8'));
+      return typeof data.lastConnectedAt === 'number' ? data.lastConnectedAt : 0;
+    } catch {
+      return 0;
+    }
+  }
+
+  /**
+   * 记录本次成功连接时刻（覆盖写 data/state/runtime.json；写失败静默忽略）。
+   * @param {number} ts - 秒级时间戳
+   * @returns {void}
+   * 副作用: 覆盖写 data/state/runtime.json
+   */
+  setLastConnectedAt(ts) {
+    try {
+      fs.mkdirSync(this.stateDir, { recursive: true });
+      fs.writeFileSync(this._runtimeFile(), JSON.stringify({ lastConnectedAt: ts }));
+    } catch {
+      /* 忽略 */
+    }
+  }
+
   // v1→v2 迁移播种来源：扫 messages/ 顶层群目录（目录 = 磁盘上出现过的群）。
   // 构造期调用（此时 msgsDir 已 mkdir 好、尚无消息写入），一次 readdir 开销可忽略
   _seedGroupDirs() {

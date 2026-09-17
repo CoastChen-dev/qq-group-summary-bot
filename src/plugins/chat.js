@@ -25,6 +25,7 @@ import { isArknightsRelated, extractKeywords } from '../core/knowledge/wiki.js';
 import { PRIORITY } from '../core/registry.js';
 import { fetchRetry } from '../core/platform/http.js';
 import { EMOJI_LIKES, isEmojiLike } from '../core/platform/emoji.js';
+import { isSensitive } from '../core/platform/filter.js';
 
 // 来源可信度权重（分数越高越可信）
 const SOURCE_TRUST = {
@@ -696,10 +697,12 @@ function resolveEmojiId(input) {
  * @param {Object} [deps.usermem] - UserMemory 实例（查/写用户记忆；null 时不注册）
  * @param {Function|null} [deps.react] - (messageId, emojiId) => Promise，贴表情出口
  *   （runtime 注入 client.setMsgEmojiLike；emojiLike.enabled=false 时传 null → 工具提示未启用）
+ * @param {number} [deps.emojiCooldownMs=60000] - 同群贴表情冷却（风控降险；0 = 不限）
  * @returns {Object[]} ChatBrain tools 数组
  */
-export function createChatTools({ arkdb, analytics, usermem, react } = {}) {
+export function createChatTools({ arkdb, analytics, usermem, react, emojiCooldownMs = 60000 } = {}) {
   const tools = [];
+  const lastReactAt = new Map(); // 群号 → 上次贴表情时间（同群频率限制用）
 
   tools.push({
     name: 'react_emoji',
@@ -714,7 +717,13 @@ export function createChatTools({ arkdb, analytics, usermem, react } = {}) {
       if (!ctx?.messageId) return '当前消息无法定位，贴表情失败';
       const id = resolveEmojiId(emoji);
       if (!id) return `没有找到表情「${emoji}」。可用示例：微笑、呲牙、偷笑、可爱、笑哭、吃瓜、捂脸、点赞、比心、鼓掌、摸鱼、委屈、快哭了、暗中观察、喵喵…`;
+      // 同群冷却（风控降险）：冷却期内不再贴，模型收到提示后照常文字回复
+      const now = Date.now();
+      if (now - (lastReactAt.get(String(ctx.groupId)) || 0) < emojiCooldownMs) {
+        return `本群刚贴过表情，暂时不再贴（冷却 ${Math.round(emojiCooldownMs / 1000)}s）`;
+      }
       await react(ctx.messageId, id);
+      lastReactAt.set(String(ctx.groupId), now);
       return `已给当前消息贴上表情：${emoji}`;
     },
   });
@@ -843,9 +852,11 @@ export function createChatPlugin(deps) {
       brain.chat(ctx.groupId, ctx.userName, ctx.text, ctx.userId, { messageId: ctx.messageId })
         .then((reply) => {
           if (!reply) return undefined;
+          // 风控降险：出站内容敏感词兜底——命中隐私/违禁关键词时替换为安全文案，不发送原文
+          const safe = isSensitive(reply) ? '这个话题我不太方便聊，我们换个话题吧~' : reply;
           return ctx.userId
-            ? client.sendGroupMsgAt(ctx.groupId, ctx.userId, reply)
-            : client.sendGroupMsg(ctx.groupId, reply);
+            ? client.sendGroupMsgAt(ctx.groupId, ctx.userId, safe)
+            : client.sendGroupMsg(ctx.groupId, safe);
         })
         .catch((e) => err(`[chat] 群 ${ctx.groupId} 发送失败:`, e.message));
       return true;
