@@ -191,7 +191,7 @@ export class WebUI {
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>PRTS Bot 管理面板</title>
+<title>Mon3tr Bot 管理面板</title>
 <style>
   body { font-family: -apple-system, "Microsoft YaHei", sans-serif; margin: 0; background: #f5f6f8; color: #222; }
   .wrap { max-width: 860px; margin: 0 auto; padding: 20px; }
@@ -217,7 +217,7 @@ export class WebUI {
 </head>
 <body>
 <div class="wrap">
-  <h1>PRTS Bot 管理面板</h1>
+  <h1>Mon3tr Bot 管理面板</h1>
 
   <div class="card">
     <h2>运行状态</h2>
