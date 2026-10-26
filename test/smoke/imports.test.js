@@ -21,7 +21,7 @@ const EXPECTED_EXPORTS = {
   'core/routing.js': ['createRouting'],
   'core/platform/analytics.js': ['Analytics'],
   'core/platform/filter.js': ['isSensitive', 'sanitizeText', 'filterMessages'],
-  'core/platform/emoji.js': ['EMOJI_LIKES', 'randomEmojiLike', 'isEmojiLike'],
+  'core/platform/emoji.js': ['EMOJI_LIKES', 'CORE_EMOJI_LIKES', 'randomEmojiLike', 'isEmojiLike'],
   'core/platform/http.js': ['fetchRetry'],
   'core/platform/logger.js': ['log', 'err'],
   'core/platform/napcat.js': ['NapCatClient'],
@@ -46,6 +46,7 @@ const EXPECTED_EXPORTS = {
   'plugins/report.js': ['createReportPlugin'],
   'plugins/refresh.js': ['createRefreshPlugin'],
   'plugins/stats.js': ['createStatsPlugin'],
+  'plugins/status.js': ['createStatusPlugin'],
   'plugins/summary.js': ['createSummaryPlugin'],
   'plugins/webui.js': ['WebUI', 'createWebUiPlugin'],
 };

@@ -48,9 +48,17 @@ function mkApp(cfgOverrides = {}, svcOverrides = {}) {
   const calls = { summarize: 0, learn: [], brainChat: null, schedulerStop: 0, close: 0 };
   let route;
   const client = {
+    selfId: 10001,
+    ws: { readyState: 1 },
     onEvent: (cb) => { route = cb; },
     connect: () => {},
     close: () => { calls.close++; },
+    call: async (action) => {
+      if (action === 'get_login_info') return { user_id: 10001, nickname: 'Mon3tr' };
+      if (action === 'get_version_info') return { app_name: 'NapCat.Onebot', app_version: '4.18.37', protocol_version: 'v11' };
+      if (action === 'get_status') return { online: true, good: true, stat: {} };
+      throw new Error(`unexpected action ${action}`);
+    },
     sendGroupMsg: async (gid, msg) => sent.push({ gid, msg }),
     sendGroupMsgAt: async (gid, uid, msg) => sent.push({ gid, at: String(uid), msg }),
     setMsgEmojiLike: async () => {},
@@ -83,7 +91,7 @@ function mkApp(cfgOverrides = {}, svcOverrides = {}) {
     entries: new Map(),
   };
   const brain = {
-    chat: async (gid, name, q, uid, opts) => { calls.brainChat = { gid, name, q, uid, messageId: opts?.messageId }; return '回复内容'; },
+    chat: async (gid, name, q, uid, opts) => { calls.brainChat = { gid, name, q, uid, messageId: opts?.messageId, faces: opts?.faces }; return '回复内容'; },
   };
 
   const app = createApp({
@@ -119,15 +127,34 @@ describe('createApp 全链（P3 五插件装配面）', () => {
   it('分发带全量注册且次序 = summary→refresh→memory→lingo→ark→gacha→stats→chat→(hooks)report/webui', () => {
     const { app } = mkApp();
     const names = app.services.registry.sorted().map((p) => p.name);
-    assert.deepEqual(names, ['summary', 'refresh', 'memory', 'lingo', 'ark', 'gacha', 'stats', 'chat', 'report', 'webui']);
+    assert.deepEqual(names, ['summary', 'refresh', 'memory', 'lingo', 'ark', 'gacha', 'stats', 'status', 'chat', 'report', 'webui']);
   });
 
   it('chat 兜底：指令全落空文本最终到 brain.chat（原 S13），回复经 client 群发', async () => {
     const { send, sent, calls } = mkApp();
     send(atEvent('波登可是谁'));
     await tick();
-    assert.deepEqual(calls.brainChat, { gid: 9, name: '博士', q: '波登可是谁', uid: 555, messageId: 'm1' });
+    assert.deepEqual(calls.brainChat, { gid: 9, name: '博士', q: '波登可是谁', uid: 555, messageId: 'm1', faces: [] });
     assert.deepEqual(sent, [{ gid: 9, at: '555', msg: '回复内容' }]); // 真 @ 提问者
+  });
+
+  it('消息里的表情段 ID 透传到 brain（「给我贴<表情图>」场景）', async () => {
+    const { send, calls } = mkApp();
+    send({
+      post_type: 'message',
+      message_type: 'group',
+      group_id: 9,
+      user_id: 555,
+      sender: { card: '博士', nickname: '博士' },
+      message: [
+        { type: 'at', data: { qq: 10001 } },
+        { type: 'text', data: { text: ' 给我贴' } },
+        { type: 'face', data: { id: '271' } },
+      ],
+    });
+    await tick();
+    assert.equal(calls.brainChat.q, '给我贴');
+    assert.deepEqual(calls.brainChat.faces, ['271']);
   });
 
   it('总结关键词：dispatch 返回 true 不发送（异步消费、无字符串文案）', async () => {
@@ -148,6 +175,19 @@ describe('createApp 全链（P3 五插件装配面）', () => {
       { gid: 9, at: '555', msg: '正在更新本地数据库，稍候…' },
       { gid: 9, at: '555', msg: '【数据更新】\n成功：无\n未变化：无\n全部成功' },
     ]);
+  });
+
+  it('平台状态指令：#status 经真实链路进入 status 插件并 @ 提问者', async () => {
+    const { send, sent, calls } = mkApp();
+    send(atEvent('#status'));
+    await tick();
+    assert.equal(calls.brainChat, null); // 被 status 消费，不落 chat
+    assert.equal(sent.length, 1);
+    assert.equal(sent[0].at, '555');
+    assert.match(sent[0].msg, /【NapCat 平台状态】/);
+    assert.match(sent[0].msg, /账号：10001（Mon3tr）/);
+    assert.match(sent[0].msg, /平台：NapCat\.Onebot v4\.18\.37/);
+    assert.match(sent[0].msg, /WS：已连接/);
   });
 
   it('确定性指令（学习）返回 string：路由层发送、指令日志路径不变', async () => {
@@ -189,7 +229,7 @@ describe('createApp 全链（P3 五插件装配面）', () => {
   it('工具装配：createApp 为 ChatBrain 注入工具表（贴表情/查询/记忆）', () => {
     const { app } = mkApp({}, { brain: null }); // 走真实 ChatBrain（构造零网络副作用）
     const names = app.services.brain.tools.map((t) => t.name);
-    assert.deepEqual(names, ['react_emoji', 'query_operator', 'query_relic', 'query_gacha', 'query_group_stats', 'query_user_memory', 'remember']);
+    assert.deepEqual(names, ['react_emoji', 'send_face', 'query_operator', 'query_relic', 'query_gacha', 'query_group_stats', 'query_user_memory', 'remember', 'set_nickname', 'set_signature', 'set_group_card', 'read_text_file', 'write_text_file']);
     assert.equal(app.services.brain.toolsEnabled, true);
   });
 

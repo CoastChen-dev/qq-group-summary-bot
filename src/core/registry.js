@@ -1,5 +1,5 @@
 /*
- * 插件注册表与消息分发中枢（P1 落地骨架；P2/P3 已接入全部 9 插件与 dispatch 调用方）。
+ * 插件注册表与消息分发中枢（P1 落地骨架；P2/P3 已接入全部插件与 dispatch 调用方）。
  *
  * 目标架构的注册/分发中枢（docs/refactor-proposal.md §目标架构）：
  * 插件声明式自注册，core 管线按确定性顺序驱动。插件描述符：
@@ -23,6 +23,7 @@ export const PRIORITY = Object.freeze({
   ark: 600,     // 干员/藏品/生日查询（规则 5-8）
   gacha: 500,   // 卡池/抽卡/抽卡记录（规则 9-11，含顺序敏感正则）
   stats: 400,   // 活跃榜/群统计（规则 12-14）
+  status: 350,  // NapCat 平台状态（#status / /status）
   chat: 300,    // LLM 兜底（S13）
 });
 
