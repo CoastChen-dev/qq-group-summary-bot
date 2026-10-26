@@ -6,14 +6,16 @@
  * 复位分支系 2026-09 坑 2 修复新增，一并在此锁定）。S2–S13 其余判定（@检测/静默门/剥
  * @/分发带）已由 runtime-dispatch 全链测试锁定，此处不重复。
  *
- * 锁定目标：① S1 connect 置位 state（ready/wsConnected/selfId 回填）并仅执行一次
- * backfill（backfillDone 置位后二次 connect 不再拉）；② backfill 语义：time<sinceTs 过滤、
+ * 锁定目标：① S1 connect 置位 state（ready/wsConnected/selfId 回填）并执行一次
+ * backfill（backfillDone 置位后同一连接内不再拉）；② backfill 语义：time<sinceTs 过滤、
  * 批内重复 message_id 去重、addHistoryMessage 真值才 analytics.record、该群有新增才
  * setLastSeenTs(gid, 批内最新 time)；③ get_login_info 失败：记日志继续 backfill（原 S1
  * catch 语义，selfId 保持 0）；④ getAllGroupIds：get_group_list 成功取 group_id 列表，
- * 调用失败回退 store.trackedGroupIds；⑤ S1 disconnect：仅复位 wsConnected（ready/
- * backfillDone 不动；重连后 connect 置回且不重复 backfill）；⑥ backfill 按群独立起点
- * （2026-09 修复坑 9）：各群 sinceTs = max(该群水位, now−72h)，群间互不钳制。
+ * 调用失败回退 store.trackedGroupIds；⑤ S1 disconnect：复位 wsConnected 并重新武装
+ * backfill（长断线重连能再补一次；短断线由离线门槛挡掉）；⑥ backfill 按群独立起点
+ * （2026-09 修复坑 9）：各群 sinceTs = max(该群水位, now−72h)，群间互不钳制；
+ * ⑦ 离线水位必须在 touchConnected 之前读（2026-10 回归：读晚会被心跳覆盖成 now，
+ * 导致 backfill 恒跳过）。
  *
  * 直接构造 createRouting（不经 createApp），fake 全内存；连接工厂参数以 over 覆盖默认。
  */
@@ -34,7 +36,11 @@ const flush = async () => {
 function mkRouting(over = {}) {
   const state = { selfId: 0, ready: false, backfillDone: false, wsConnected: false };
   const seenBy = over.seenByGroup ?? {}; // 各群水位（坑 9：backfill 起点按群读）
-  const calls = { getHistory: 0, historyGids: [], added: [], recorded: [], lastSeenSet: [], connectedSet: [] };
+  const calls = { getHistory: 0, historyGids: [], added: [], recorded: [], lastSeenSet: [] };
+  // 心跳模拟：touchConnected 之后 runtime.json 被写成 now——getLastConnectedAt 也随之为 now。
+  // 老代码「先心跳后读水位」会因此恒得离线 0 分钟（2026-10 回归点）。
+  let touched = false;
+  const resetOnline = (ts) => { touched = false; over.lastConnectedAt = ts; };
   const client = {
     call: async () => {
       if (over.groupListError) throw new Error('get_group_list 失败');
@@ -52,8 +58,8 @@ function mkRouting(over = {}) {
     getLastSeenTs: (gid) => seenBy[String(gid)] ?? 0,
     addHistoryMessage: (gid, m) => { calls.added.push([gid, m]); return { text: '历史消息', time: m.time }; }, // 恒真值 = 新增
     setLastSeenTs: (gid, t) => { calls.lastSeenSet.push([gid, t]); },
-    getLastConnectedAt: () => over.lastConnectedAt ?? 0,
-    setLastConnectedAt: (t) => calls.connectedSet.push(t),
+    getLastConnectedAt: () => (touched ? Math.floor(Date.now() / 1000) : (over.lastConnectedAt ?? 0)),
+    touchConnected: () => { touched = true; },
     trackedGroupIds: () => [111, 222],
   };
   const analytics = { record: (gid, rec) => calls.recorded.push([gid, rec]) };
@@ -69,7 +75,7 @@ function mkRouting(over = {}) {
     backfillMaxHours: over.backfillMaxHours ?? 72,
     backfillStaggerMs: 0, // 测试关闭群间错峰（生产默认 800ms）
   });
-  return { routing, state, client, calls };
+  return { routing, state, client, calls, resetOnline };
 }
 
 /** S1 合成 connect meta 事件（napcat 在 WS open 后自行合成，见 napcat.js） */
@@ -181,7 +187,20 @@ describe('routing：S1 connect → selfId 回填 + backfill 单次执行', () =>
     await flush();
     assert.equal(calls.getHistory, 0); // 未调 get_group_msg_history
     assert.equal(calls.added.length, 0);
-    assert.equal(calls.connectedSet.length, 1); // 本次在线时刻已记录（供下次判断）
+  });
+
+  it('离线水位在心跳之前读：长离线（3h）启动仍能补拉（2026-10 回归）', async () => {
+    const now = Math.floor(Date.now() / 1000);
+    const { routing, calls } = mkRouting({
+      tracked: [7],
+      lastConnectedAt: now - 3 * 3600, // 3 小时前最后在线
+      messages: [{ message_id: 'a', time: now }],
+    });
+    routing.onEvent(connectEvent());
+    await flush();
+    // 若先打心跳再读水位（旧实现），runtime.json 已被覆盖成 now → 这里会是 0 次
+    assert.equal(calls.getHistory, 1);
+    assert.equal(calls.added.length, 1);
   });
 });
 
@@ -206,11 +225,12 @@ describe('routing：getAllGroupIds 与 backfill 群集合选择', () => {
   });
 });
 
-describe('routing：S1 disconnect → wsConnected 复位（2026-09 修复坑 2）', () => {
-  it('disconnect 仅复位 wsConnected；ready/backfillDone 不动；重连置回且不重复 backfill', async () => {
+describe('routing：S1 disconnect → wsConnected 复位 + backfill 重新武装', () => {
+  it('disconnect 复位 wsConnected 并重新武装 backfill；长断线重连补一次、短断线不补', async () => {
     const now = Math.floor(Date.now() / 1000);
-    const { routing, state, calls } = mkRouting({
+    const { routing, state, calls, resetOnline } = mkRouting({
       tracked: [7],
+      lastConnectedAt: now - 3 * 3600,
       messages: [{ message_id: 'a', time: now }],
     });
     routing.onEvent(connectEvent());
@@ -218,18 +238,26 @@ describe('routing：S1 disconnect → wsConnected 复位（2026-09 修复坑 2�
     assert.equal(state.ready, true);
     assert.equal(state.wsConnected, true);
     assert.equal(state.backfillDone, true);
+    assert.equal(calls.getHistory, 1);
 
     // WS 断开（napcat close 回调合成 lifecycle/disconnect 事件，见 napcat.js）：同步复位在线标志
     routing.onEvent({ post_type: 'meta_event', meta_event_type: 'lifecycle', sub_type: 'disconnect' });
     assert.equal(state.wsConnected, false);
-    assert.equal(state.ready, true);      // 断线期间无入站消息：就绪锚点不回落
-    assert.equal(state.backfillDone, true);
+    assert.equal(state.ready, true);       // 断线期间无入站消息：就绪锚点不回落
+    assert.equal(state.backfillDone, false); // 重新武装：下一次 connect 允许再补
 
-    // 重连后 connect 事件置回在线；backfillDone 保持「仅一次」→ 不重复补偿拉取
+    // 断线 3 小时后再连：补拉缺口
+    resetOnline(now - 3 * 3600);
     routing.onEvent(connectEvent());
     await flush();
     assert.equal(state.wsConnected, true);
-    assert.equal(state.ready, true);
-    assert.equal(calls.getHistory, 1);
+    assert.equal(calls.getHistory, 2);
+
+    // 再抖一下（1 分钟）：重新武装但被离线门槛挡住，不多拉
+    routing.onEvent({ post_type: 'meta_event', meta_event_type: 'lifecycle', sub_type: 'disconnect' });
+    resetOnline(now - 60);
+    routing.onEvent(connectEvent());
+    await flush();
+    assert.equal(calls.getHistory, 2);
   });
 });

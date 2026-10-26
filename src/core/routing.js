@@ -86,28 +86,29 @@ export function createRouting(options) {
   }
 
   /**
-   * 离线补偿拉取（§6.1；仅 WS connect 生命周期回调内执行一次，backfillDone 置位后不再跑）：
+   * 离线补偿拉取（每次 WS connect 生命周期回调内执行一次，backfillDone 置位防并发重入；
+   * disconnect 时复位，长断线重连后能再补一次缺口）：
    * 每群独立起点 sinceTs = max(该群 lastSeenTs, now − backfill.maxHours×3600)
    * （默认 72h 兜底；2026-09 修复坑 9：原为全局单值——单群拉取失败会把别群水位推高，
    * 该群缺口永远错过，现按群独立、互不钳制）；
    * 群集合 = trackedGroups 非空用之，否则 get_group_list（失败回退磁盘已跟踪群）；
-   * 每群 get_group_msg_history(messageSeq:0, count:1000) → 过滤 time<sinceTs 与批内重复 id →
+   * 每群 get_group_msg_history(messageSeq:0, count:200) → 过滤 time<sinceTs 与批内重复 id →
    * addHistoryMessage（内存/磁盘双去重，仅返回真才算新增）→ analytics.record；
    * 该群有新增才 setLastSeenTs(gid, latest)（只增不减）；单群失败记日志继续。
    *
+   * @param {number} [lastOnlineAt=0] - 「本次连接前最后一次在线」的秒级时刻（onEvent 在打心跳前
+   *   取好传入：touchConnected 会把 runtime.json 覆盖成 now，读晚一步就会算出离线 0 分钟而恒跳过）
    * @returns {Promise<void>}
    * 副作用：写消息存储/状态文件/SQLite（analytics.record 仅实时镜像单行；历史整库导入
    * 由 runtime.start() 的 importHistory 后台执行，此处不触发——2026-09 修复坑 5）
    */
-  async function backfillHistory() {
+  async function backfillHistory(lastOnlineAt = 0) {
     if (!state.ready || state.backfillDone) return;
     state.backfillDone = true;
     const nowSec = Math.floor(Date.now() / 1000);
     // 风控降险（2026-09）：先判断「上次在线距今」——短暂重启（< backfillMinOfflineMinutes）
     // 不补拉历史，避免调试/频繁重启时反复触发 get_group_msg_history；真实长时间离线才补偿
-    const lastConnectedAt = store.getLastConnectedAt ? store.getLastConnectedAt() : 0;
-    if (store.setLastConnectedAt) store.setLastConnectedAt(nowSec);
-    const offlineSec = lastConnectedAt ? nowSec - lastConnectedAt : Number.MAX_SAFE_INTEGER;
+    const offlineSec = lastOnlineAt ? nowSec - lastOnlineAt : Number.MAX_SAFE_INTEGER;
     if (offlineSec < backfillMinOfflineMinutes * 60) {
       log(`[backfill] 距上次在线仅 ${Math.max(1, Math.round(offlineSec / 60))} 分钟（< ${backfillMinOfflineMinutes}），跳过补拉（风控降险）`);
       return;
@@ -160,13 +161,18 @@ export function createRouting(options) {
   // 事件路由链 S1–S13（architecture §4）：收到任意 WS 事件按序逐条判定，命中即 return；
   // 注意 S5「入库先于一切」——非 @、静默时段的消息也照常入库计数，只是不回复
   function onEvent(event) {
+    const isConnect = event.post_type === 'meta_event'
+      && event.meta_event_type === 'lifecycle' && event.sub_type === 'connect';
+    // 离线水位必须在心跳之前读：touchConnected 会把 runtime.json 的 lastConnectedAt 覆盖成 now，
+    // 先打心跳再判断「离线多久」会恒得 0 分钟 → backfill 永远跳过（2026-10 修复；只在 connect 时读，避免每条消息都读盘）
+    const lastOnlineAt = isConnect && store.getLastConnectedAt ? store.getLastConnectedAt() : 0;
     // 在线心跳（节流至每分钟一次落盘）：让 backfill 能准确判断本次启动前的离线时长
     // （长跑实例重启不算长时间离线 → 跳过历史拉取，风控降险）
     store.touchConnected?.();
     if (event.post_type === 'meta_event') {
       // S1 lifecycle/connect（WS open 后 napcat 自行合成）：置 ready/wsConnected，回填 selfId（若为 0），
-      // 随后异步 backfillHistory（仅此一次）
-      if (event.meta_event_type === 'lifecycle' && event.sub_type === 'connect') {
+      // 随后异步 backfillHistory（每次连接一次，disconnect 时复位 backfillDone）
+      if (isConnect) {
         state.ready = true;
         state.wsConnected = true;
         (async () => {
@@ -179,16 +185,16 @@ export function createRouting(options) {
               err('获取登录信息失败:', e.message);
             }
           }
-          await backfillHistory();
+          await backfillHistory(lastOnlineAt);
         })();
         return;
       }
-      // WS 断开（napcat close 回调合成的 lifecycle/disconnect）：仅复位 wsConnected——
-      // 状态页不再显示「在线」假象（2026-09 修复坑 2）。ready/backfillDone 不动：
-      // 断线期间无入站消息，重连后的 connect 事件会重新置位；backfillDone 保持「离线
-      // 补偿仅一次」语义
+      // WS 断开（napcat close 回调合成的 lifecycle/disconnect）：复位 wsConnected，并重新武装
+      // backfill——长断线（>5min）重连后能把缺口补回来；短断线由 backfill 的离线时长门槛挡掉，
+      // 不会频繁拉历史
       if (event.meta_event_type === 'lifecycle' && event.sub_type === 'disconnect') {
         state.wsConnected = false;
+        state.backfillDone = false;
         log('[napcat] WS 断开，连接状态已复位');
       }
       return;
