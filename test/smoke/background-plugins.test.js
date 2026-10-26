@@ -206,7 +206,7 @@ describe('report 插件（每日日报，仅 hooks）', () => {
     assert.equal(reg.dispatch({ groupId: 1, text: '刷新数据' }), null);
   });
 
-  it('hooks.start 注册 9:00 回调；回调驱动完整日报（活跃群私聊发送）；hooks.stop 停调度', async () => {
+  it('hooks.start 注册 9:00 回调；回调驱动完整日报（合并转发：标题+每群一节点）；hooks.stop 停调度', async () => {
     let run;
     let stopped = false;
     const sent = [];
@@ -216,8 +216,10 @@ describe('report 插件（每日日报，仅 hooks）', () => {
         collectRange: () => [{ time: Math.floor(Date.now() / 1000), text: '摸鱼' }],
       },
       client: {
+        selfId: 12345,
         getGroupInfo: async () => ({ group_name: '测试群' }),
-        sendPrivateMsg: async (uid, msg) => sent.push({ uid, msg }),
+        sendPrivateForward: async (uid, nodes) => sent.push({ uid, nodes }),
+        sendPrivateMsg: async (uid, msg) => sent.push({ uid, msg }), // 兜底路径（本用例不应触发）
       },
       summarizer: { summarize: async () => '日报内容' },
       scheduler: { start: (fn) => { run = fn; }, stop: () => { stopped = true; } },
@@ -236,10 +238,43 @@ describe('report 插件（每日日报，仅 hooks）', () => {
     await run();
     assert.equal(sent.length, 1);
     assert.equal(sent[0].uid, 9);
-    assert.ok(sent[0].msg.startsWith('【昨日群聊日报'), sent[0].msg);
-    assert.ok(sent[0].msg.includes('测试群')); // getGroupName 走 client.getGroupInfo
+    assert.ok(Array.isArray(sent[0].nodes)); // 走合并转发而非纯文本
+    assert.equal(sent[0].nodes.length, 2); // 标题节点 + 测试群节点
+    assert.ok(sent[0].nodes[0].data.content.startsWith('【昨日群聊日报'), sent[0].nodes[0].data.content);
+    assert.equal(sent[0].nodes[1].data.name, '测试群'); // getGroupName 走 client.getGroupInfo
+    assert.ok(sent[0].nodes[1].data.content.includes('日报内容'));
 
     plugin.hooks.stop();
     assert.equal(stopped, true);
+  });
+
+  it('日报合并转发失败：回退整条私聊文本', async () => {
+    let run;
+    const sent = [];
+    const plugin = createReportPlugin({
+      store: {
+        loadFromDisk: () => {},
+        collectRange: () => [{ time: Math.floor(Date.now() / 1000), text: '摸鱼' }],
+      },
+      client: {
+        selfId: 1,
+        getGroupInfo: async () => ({ group_name: '测试群' }),
+        sendPrivateForward: async () => { throw new Error('forward 不可用'); },
+        sendPrivateMsg: async (uid, msg) => sent.push({ uid, msg }),
+      },
+      summarizer: { summarize: async () => '日报内容' },
+      scheduler: { start: (fn) => { run = fn; }, stop: () => {} },
+      filterMessages: passThrough,
+      trackedGroups: () => [1],
+      getAllGroupIds: async () => [1],
+      reportUserId: 9,
+      reportMinMessages: 1,
+      isReady: () => true,
+    });
+    plugin.hooks.start();
+    await run();
+    assert.equal(sent.length, 1);
+    assert.ok(sent[0].msg.startsWith('【昨日群聊日报'), sent[0].msg);
+    assert.ok(sent[0].msg.includes('测试群') && sent[0].msg.includes('日报内容'));
   });
 });

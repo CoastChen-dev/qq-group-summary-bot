@@ -11,8 +11,9 @@
  * 编排口径（§6.2，逐字迁自 runtime）：守卫 isReady() 与 reportUserId（未配置则跳过）；
  * 口径 = 昨日本地自然日 [昨日00:00, 今日00:00) —— 每群 loadFromDisk(gid, yesterdayStart,
  * todayStart) 载入该日期段再 collectRange + 敏感过滤，消息数 ≥ reportMinMessages(100) 才算
- * 活跃群 → 逐群 summarize(...,'daily')（单群失败继续），全部失败则不发送；成功则私聊发给
- * reportUserId。全程不写 lastSummaryAt/lastSeen 状态。
+ * 活跃群 → 逐群 summarize(...,'daily')（单群失败继续），全部失败则不发送；成功则以
+ * 「合并转发」私聊发给 reportUserId（标题节点 + 每群一个节点；转发失败回退整条文本）。
+ * 全程不写 lastSummaryAt/lastSeen 状态。
  *
  * 依赖：logger；服务/配置经 createReportPlugin(deps) 注入（scheduler/就绪标志属 runtime 资产，
  * 经 deps 移交；getAllGroupIds 与 backfillHistory 共用、现居 core/routing.js 工厂并经 deps 注入）；
@@ -26,7 +27,7 @@ import { log, err } from '../core/platform/logger.js';
  * 仅 hooks 插件：priority 0 不占任何分发带（消息面恒 null）；hooks.start 起每日调度。
  * @param {Object} deps - runtime 装配期注入
  * @param {Object} deps.store - MessageStore 实例（loadFromDisk/collectRange）
- * @param {Object} deps.client - NapCatClient 实例（getGroupInfo 群名 / sendPrivateMsg 发送）
+ * @param {Object} deps.client - NapCatClient 实例（getGroupInfo 群名 / sendPrivateForward 合并转发 / sendPrivateMsg 回退）
  * @param {Object} deps.summarizer - Summarizer 实例（LLM 概括，mode 'daily'）
  * @param {Object} deps.scheduler - Scheduler 实例（每日循环调度，触发时刻由构造传参决定——runtime 按
  *   report.hour/minute 装配，缺省 9:00；start 在 hooks.start 注册）
@@ -99,12 +100,12 @@ export function createReportPlugin(deps) {
     }
 
     log(`[report] 昨日(${yesterdayLabel})活跃群 ${activeGroups.length} 个，正在生成日报...`);
-    const parts = [];
+    const parts = []; // {name, text}
     for (const { gid, recs } of activeGroups) {
       try {
         const name = await getGroupName(gid);
         const summary = await summarizer.summarize(gid, recs, yesterdayLabel, 'daily');
-        parts.push(`【${name}】${recs.length} 条消息\n${summary}`);
+        parts.push({ name, text: `${recs.length} 条消息\n${summary}` });
         log(`[report] 群 ${gid}(${name}) 日报已生成`);
       } catch (e) {
         err(`[report] 群 ${gid} 日报失败:`, e.message);
@@ -116,9 +117,21 @@ export function createReportPlugin(deps) {
       return;
     }
 
-    const msg = `【昨日群聊日报 ${yesterdayLabel}】\n共 ${parts.length} 个活跃群\n\n${parts.join('\n\n---\n\n')}`;
-    await client.sendPrivateMsg(reportUserId, msg);
-    log(`[report] 日报已私聊发送给 ${reportUserId}`);
+    // 合并转发（2026-10）：标题节点 + 每群一个节点（「每群一条消息」）；失败回退整条私聊文本
+    const header = `【昨日群聊日报 ${yesterdayLabel}】共 ${parts.length} 个活跃群`;
+    const uin = client.selfId || 0;
+    const nodes = [
+      { type: 'node', data: { uin, name: 'Mon3tr 日报', content: header } },
+      ...parts.map((p) => ({ type: 'node', data: { uin, name: p.name, content: p.text } })),
+    ];
+    try {
+      await client.sendPrivateForward(reportUserId, nodes);
+      log(`[report] 日报已合并转发给 ${reportUserId}（${nodes.length} 个节点）`);
+    } catch (e) {
+      err('[report] 合并转发失败，回退整条私聊:', e.message);
+      const msg = `${header}\n\n${parts.map((p) => `【${p.name}】${p.text}`).join('\n\n---\n\n')}`;
+      await client.sendPrivateMsg(reportUserId, msg);
+    }
   }
 
   return {
