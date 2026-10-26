@@ -157,7 +157,7 @@ describe('卡池与抽卡（规则 9-11）', () => {
     const expected = '【当前卡池】\n'
       + '1. [限定寻访] 深池纪念（6★UP：能天使，5★UP：阿米娅）\n'
       + '2. 愚人号（6★UP：归溟幽灵鲨，5★UP：德克萨斯）\n'
-      + '\n用法：十连 1 / 单抽 卡池名关键字';
+      + '\n用法：十连 1 / 一百连 2 / 单抽 卡池名关键字';
     assert.equal(tryCommand(ctx, '卡池'), expected);
     assert.equal(tryCommand(ctx, '卡池列表'), expected);
   });
@@ -206,6 +206,67 @@ describe('卡池与抽卡（规则 9-11）', () => {
     assert.equal(withRand([0.01, 0.4, 0], () => tryCommand(ctx, '单抽 深池')).split('\n')[0], '【单抽·深池纪念】（6★UP：能天使；5★UP：阿米娅）');
     assert.equal(withRand([0.01, 0.4, 0], () => tryCommand(ctx, '单抽 不存在的池子')).split('\n')[0], '【单抽·深池纪念】（6★UP：能天使；5★UP：阿米娅）');
     assert.equal(withRand([0.01, 0.4, 0], () => tryCommand(ctx, '单抽 99')).split('\n')[0], '【单抽·深池纪念】（6★UP：能天使；5★UP：阿米娅）');
+  });
+
+  it('十连及以下不拆分：即使有 client 也返回普通文案，不触发合并转发', (t) => {
+    const ctx = makeCtx();
+    const forwards = [];
+    ctx.client = { selfId: 123, sendGroupForward: async (gid, nodes) => { forwards.push({ gid, nodes }); } };
+    const seq = Array(30).fill(0).flatMap(() => [0.01, 0.4, 0]);
+    const r = withRand(seq, () => tryCommand(ctx, '十连'));
+    assert.ok(typeof r === 'string' && r.startsWith('【十连·深池纪念】')); // 十连结果不拆开
+    assert.equal(forwards.length, 0);
+  });
+
+  it('一百连：自动拆分合并转发（头节点 + 每 10 抽一节点），池参数与中文数字生效', (t) => {
+    const ctx = makeCtx();
+    const forwards = [];
+    ctx.client = { selfId: 123, sendGroupForward: async (gid, nodes) => { forwards.push({ gid, nodes }); } };
+    const seq = Array(300).fill(0).flatMap(() => [0.01, 0.4, 0]);
+    const r = withRand(seq, () => tryCommand(ctx, '一百连 2')); // 中文数字 + 序号选池
+    assert.equal(r, true); // 自驱转发（不返回文案）
+    assert.equal(forwards.length, 1);
+    assert.equal(forwards[0].gid, '10001');
+    assert.equal(forwards[0].nodes.length, 11); // 头节点 + 10 辆十连
+    assert.ok(forwards[0].nodes[0].data.content.includes('100连·愚人号'));
+    assert.ok(forwards[0].nodes[0].data.content.includes('测试群友'));
+    assert.equal(forwards[0].nodes[1].data.name, '第 1-10 抽');
+    assert.equal(forwards[0].nodes[1].data.content.split('\n').length, 10);
+    assert.equal(forwards[0].nodes[10].data.name, '第 91-100 抽');
+    assert.equal(ctx.analytics.myPulls('10001', 'u1').total, 100); // 100 抽全部落库
+  });
+
+  it('一千连：超单卡预算拆多张卡依次转发（1000 抽全部落库）', async (t) => {
+    const ctx = makeCtx();
+    const forwards = [];
+    ctx.client = { selfId: 123, sendGroupForward: async (gid, nodes) => { forwards.push({ gid, nodes }); } };
+    const seq = Array(3000).fill(0).flatMap(() => [0.01, 0.4, 0]);
+    const r = withRand(seq, () => tryCommand(ctx, '一千连'));
+    assert.equal(r, true);
+    await new Promise((res) => setTimeout(res, 1600)); // 等 3 张卡（含 2×600ms 间隔）发完
+    assert.equal(forwards.length, 3);
+    assert.ok(forwards[0].nodes[0].data.content.includes('第 1/3 卡'));
+    assert.ok(forwards[2].nodes[0].data.content.includes('第 3/3 卡'));
+    assert.equal(forwards[2].nodes[forwards[2].nodes.length - 1].data.name, '第 991-1000 抽');
+    assert.equal(ctx.analytics.myPulls('10001', 'u1').total, 1000);
+  });
+
+  it('N 连解析与上限：阿拉伯/中文数字等效，>1000 或 0 被拒且不抽不转', (t) => {
+    const ctx = makeCtx();
+    const forwards = [];
+    ctx.client = { selfId: 123, sendGroupForward: async (gid, nodes) => { forwards.push({ gid, nodes }); } };
+    assert.equal(tryCommand(ctx, '一千零一连'), '一次最多 1000 连');
+    assert.equal(tryCommand(ctx, '1001连'), '一次最多 1000 连');
+    assert.equal(tryCommand(ctx, '零连'), '一次最多 1000 连');
+    assert.equal(tryCommand(ctx, '0连'), '一次最多 1000 连');
+    assert.equal(forwards.length, 0);
+    // 二十连（中文）与 20连（阿拉伯）等效：头节点 + 2 辆十连
+    const seq = Array(60).fill(0).flatMap(() => [0.01, 0.4, 0]);
+    assert.equal(withRand(seq, () => tryCommand(ctx, '二十连')), true);
+    assert.equal(forwards[0].nodes.length, 3);
+    assert.ok(forwards[0].nodes[0].data.content.includes('20连·深池纪念'));
+    assert.equal(withRand(seq, () => tryCommand(ctx, '20连')), true);
+    assert.equal(forwards[1].nodes.length, 3);
   });
 
   it('抽卡记录 [N]：最近 N 个 6★ 明细+累计统计；欧气榜按 6★ 排行', (t) => {
