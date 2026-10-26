@@ -28,7 +28,8 @@ QQ 对自动化账号有阶梯式风控（提示 → 限制 → 冻结 7/30 天 
    - backfill：离线 < `backfill.minOfflineMinutes`（默认 5 分钟）整体跳过；单群水位 < 2 分钟跳过；单群 `count: 200`；群间错峰 `backfillStaggerMs`（默认 300ms）
    - backfill 触发时序（2026-10 实测修复）：离线水位必须在 `store.touchConnected()` **之前**读（routing.onEvent 顶部），读晚一步会被心跳覆盖成 now → 补偿恒跳过；`backfillDone` 在 disconnect 时复位，长断线重连能再补一次，短断线仍由 5 分钟门槛挡住
    - 数据刷新：`.tmp` → rename 原子替换，成功后清历史 `.bak`（不再每次留一份 39MB 旧表）
-   - 重连：指数退避 3s→30s 封顶（core/platform/napcat.js）
+   - 重连：指数退避 3s→30s 封顶，且连接持续稳定 30s 后才复位（连上就断不重置，core/platform/napcat.js）
+   - 内存：MessageStore 每群只保留最近 72h 消息（`retentionHours`），更早的清出内存、磁盘 JSONL 保留，按需 `loadFromDisk` 补载（2026-10）
    - 贴表情：同群冷却 `emojiLike.cooldownSeconds`（默认 5s）
    - 发表情消息：同群发送间隔 `emojiLike.sendCooldownSeconds`（默认 3s，排队节流不丢弃）
    - 出站内容：chat 插件发送前 `isSensitive` 兜底替换（命中即换安全文案）
