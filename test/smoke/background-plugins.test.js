@@ -277,4 +277,33 @@ describe('report 插件（每日日报，仅 hooks）', () => {
     assert.ok(sent[0].msg.startsWith('【昨日群聊日报'), sent[0].msg);
     assert.ok(sent[0].msg.includes('测试群') && sent[0].msg.includes('日报内容'));
   });
+
+  it('月初跨月：昨日标签取上月末一天，不出现 00 日（2026-11-01 → 2026-10-31）', async (t) => {
+    t.mock.timers.enable({ apis: ['Date'], now: new Date(2026, 10, 1, 9, 0, 0) }); // 11 月 1 日 9:00
+    let run;
+    const seenLabels = [];
+    const plugin = createReportPlugin({
+      store: {
+        loadFromDisk: () => {},
+        collectRange: () => [{ time: Math.floor(Date.now() / 1000), text: '摸鱼' }],
+      },
+      client: {
+        selfId: 1,
+        getGroupInfo: async () => ({ group_name: '测试群' }),
+        sendPrivateForward: async () => {},
+        sendPrivateMsg: async () => {},
+      },
+      summarizer: { summarize: async (gid, recs, day) => { seenLabels.push(day); return '日报内容'; } },
+      scheduler: { start: (fn) => { run = fn; }, stop: () => {} },
+      filterMessages: passThrough,
+      trackedGroups: () => [1],
+      getAllGroupIds: async () => [1],
+      reportUserId: 9,
+      reportMinMessages: 1,
+      isReady: () => true,
+    });
+    plugin.hooks.start();
+    await run();
+    assert.deepEqual(seenLabels, ['2026-10-31']); // 旧实现会算出 2026-11-00
+  });
 });

@@ -77,9 +77,11 @@ export function createReportPlugin(deps) {
     }
 
     const now = new Date();
-    const yesterdayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1).getTime() / 1000;
+    // 昨日由 Date 归一（跨月/跨年自动进位）：不能用 getDate()-1 拼字符串——每月 1 号会拼出「YYYY-MM-00」
+    const yesterday = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1);
+    const yesterdayStart = yesterday.getTime() / 1000;
     const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime() / 1000;
-    const yesterdayLabel = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate() - 1).padStart(2, '0')}`;
+    const yesterdayLabel = `${yesterday.getFullYear()}-${String(yesterday.getMonth() + 1).padStart(2, '0')}-${String(yesterday.getDate()).padStart(2, '0')}`;
 
     const groups = trackedGroups().length > 0 ? trackedGroups() : await getAllGroupIds();
     const activeGroups = [];
