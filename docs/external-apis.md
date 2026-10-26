@@ -87,7 +87,7 @@ DeepSeek API **不支持服务端联网搜索**（Responses API 的 `web_search`
 - 4 表：干员表 / 档案 / 藏品 / 卡池（`zh_CN/gamedata/excel/`）。
 - 版本比对：`If-None-Match: <etag>` → **304 = 未变化**，跳过下载。
 - 结构校验：文件 <1024B / 首字节非 `{` / 计数（干员≥500、档案≥100、藏品≥500、卡池≥10）任一不过 → 拒绝写入并抛错。
-- 原子写入：`.tmp` → 旧文件备份 `.bak` → rename；90s 请求超时。
+- 原子写入：`.tmp` → rename（新内容先过结构校验，不留 `.bak` 回滚点）；90s 请求超时。
 - 上游数据结构约定（ArkDB 消费面）：character_table（`.characters` 或扁平）、handbook `.handbookDict`、藏品递归找 `type==='RELIC'`、卡池 `.gachaPoolClient`。
 
 ## 5. 实名上下文与用户记忆（plugins/chat.js ChatBrain 内部约定）

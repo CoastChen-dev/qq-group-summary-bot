@@ -17,7 +17,7 @@ data/
     character_table.json  handbook_info_table.json
     roguelike_topic_table.json  gacha_table.json
     .etags.json                         ETag 版本记录（HTTP 304 判断用）
-    <表名>.tmp / <表名>.bak             刷新过程中的临时/备份文件
+    <表名>.tmp                         刷新过程中的临时文件（成功后清理历史 .bak）
 ```
 
 ## 1. 消息 JSONL（data/messages/<群号>/<日期>.jsonl）
@@ -84,4 +84,4 @@ data/
 - **关闭**：`memory.enabled=false` 时不加载不注入，记忆指令回「记忆功能未启用」。
 
 - ArkDB 惰性加载（首次访问触发，`_loaded` 幂等）；缺文件仅日志、空表继续；`reload()` 供刷新后热替换。
-- `DataRefresher` 更新流程：`If-None-Match: <etag>` → 304 视为未变化跳过；校验（<1024B / 首字节非 `{` / 结构计数 干员≥500、档案≥100、藏品≥500、池≥10）→ 写 `.tmp` → 旧文件复制为 `.bak` → rename 原子替换；`.etags.json` 在 4 表全部处理完后保存。失败路径可能残留 `.tmp`（无人清理，无害）。
+- `DataRefresher` 更新流程：`If-None-Match: <etag>` → 304 视为未变化跳过；校验（<1024B / 首字节非 `{` / 结构计数 干员≥500、档案≥100、藏品≥500、池≥10）→ 写 `.tmp` → rename 原子替换 → 清掉历史 `.bak`；`.etags.json` 在 4 表全部处理完后保存。失败路径可能残留 `.tmp`（无人清理，无害）。

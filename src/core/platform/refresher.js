@@ -1,7 +1,7 @@
 // 数据刷新模块：从 ArknightsGameData 上游（jsDelivr / GitHub raw 双镜像）下载方舟数据表，逐个结构校验后原子替换本地 JSON 数据库文件。
 // 导出：DataRefresher（class；对外接口 refresh()）。
 // 依赖：Node 内置 fs/path、全局 fetch、./logger.js（log）；唯一实例化点 core/runtime.js：new DataRefresher(path.join(dataDir, 'ark'), config.dataRefresh || {})；refresh() 由 refresh 插件的 api.refresh 编排调用（群指令/定时器/WebUI 三触发源共用同一 runner）。
-// 数据：读取 config.json 的 dataRefresh.baseUrl / baseUrls；写入 ark 目录下 character_table / handbook_info_table / roguelike_topic_table / gacha_table .json（含 .tmp/.bak），并维护 .etags.json（文件名 → ETag）。
+// 数据：读取 config.json 的 dataRefresh.baseUrl / baseUrls；写入 ark 目录下 character_table / handbook_info_table / roguelike_topic_table / gacha_table .json（.tmp 临时文件，成功后清掉历史 .bak），并维护 .etags.json（文件名 → ETag）。
 
 import fs from 'node:fs';
 import path from 'node:path';
@@ -126,12 +126,12 @@ export class DataRefresher {
         // 结构校验（防止上游数据损坏污染本地库）
         if (file.validate) file.validate(buf);
 
-        // 原子替换：写临时文件 → 备份旧文件 → rename
+        // 原子替换：写临时文件 → rename。新内容在 rename 前已过结构校验，旧表可从镜像源重下，
+        // 故不再留 .bak 回滚点（每次更新都复制一份旧表，4 张表累计约 39MB 白占盘）；
+        // 顺手清掉历史版本留下的 .bak。
         fs.writeFileSync(tmp, buf);
-        if (fs.existsSync(final)) {
-          try { fs.copyFileSync(final, `${final}.bak`); } catch { /* 备份失败不阻塞 */ }
-        }
         fs.renameSync(tmp, final);
+        try { fs.rmSync(`${final}.bak`, { force: true }); } catch { /* 清理失败不阻塞 */ }
         if (newEtag) this.etags[file.name] = newEtag;
         return { changed: true, size: buf.length };
       } catch (e) {
@@ -145,7 +145,7 @@ export class DataRefresher {
   /**
    * 刷新全部数据文件：逐个「下载 → 校验 → 原子替换」，结束后统一持久化 ETag 记录。
    * @returns {Promise<{updated: string[], unchanged: string[], failed: string[]}>} updated/unchanged 为成功文件的 desc 名列表，failed 为「desc: 失败原因」列表；单项失败不中断其余文件
-   * 副作用：写盘（含 .tmp/.bak 文件）、更新 .etags.json、打印进度日志
+   * 副作用：写盘（.tmp 临时文件、成功后清理历史 .bak）、更新 .etags.json、打印进度日志
    */
   async refresh() {
     const updated = [];

@@ -19,7 +19,7 @@
  *
  * 依赖：logger；服务/配置经 createRefreshPlugin(deps) 注入（deps 直传，不随静态数组交付）；
  * 实例化点：core/runtime.js createApp 装配期。
- * 读写数据：联网下载写盘 data/ark/（原子写入 + 旧文件 .bak 备份）；arkdb 内存热重载；可能群发播报。
+ * 读写数据：联网下载写盘 data/ark/（原子写入，成功后清掉历史 .bak）；arkdb 内存热重载；可能群发播报。
  */
 import { log, err } from '../core/platform/logger.js';
 import { PRIORITY } from '../core/registry.js';
@@ -51,7 +51,7 @@ export function createRefreshPlugin(deps) {
    *   （另在 broadcast===true 时附播报）；为 null（定时器/WebUI 触发）时仅当 broadcast 把播报广播给全部跟踪群
    * @param {string|number|null} [atUserId=null] - 手动指令触发时传提问者 QQ：结果回执真 @ 该成员；null 纯文本
    * @returns {Promise<string>} 「【数据更新】…」结果文本（供群回执与 WebUI /api/refresh 复用）
-   * 副作用：联网下载写盘 data/ark/（原子写入+旧文件 .bak 备份）、arkdb 内存热重载、
+   * 副作用：联网下载写盘 data/ark/（原子写入，成功后清掉历史 .bak）、arkdb 内存热重载、
    * 更新时清 q:* 知识检索缓存（坑 3）、可能群发播报；发送失败吞掉只记日志
    */
   async function refresh(notifyGroupId = null, atUserId = null) {
