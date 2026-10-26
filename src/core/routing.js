@@ -26,8 +26,8 @@ import { fmtFull } from './platform/store.js';
  *   runtime 侧 isReady/getStatus 读同一对象）；includeSelf（S3 机器人自身消息）、
  *   tracksGroup（S4 群白名单判定）、trackedGroups（backfill 群集合，空数组 = 全部群）、
  *   quietEnabled/quietStart/quietEnd（S7 静默时段）、backfillMaxHours（sinceTs 兜底窗口）、
- *   backfillStaggerMs（backfill 群间错峰延迟，默认 800ms，风控降险；测试传 0 关闭）、
- *   backfillMinOfflineMinutes（离线短于该分钟数则跳过补拉，默认 10，风控降险）
+ *   backfillStaggerMs（backfill 群间错峰延迟，默认 300ms，风控降险；测试传 0 关闭）、
+ *   backfillMinOfflineMinutes（离线短于该分钟数则跳过补拉，默认 5，风控降险）
  * @returns {{onEvent: Function, getAllGroupIds: Function, backfillHistory: Function}}
  *   onEvent 挂 client.onEvent（预载后）；getAllGroupIds 注入 report 插件；backfillHistory 由
  *   onEvent 的 S1 connect 分支调用（仅此一次），runtime 不再持有
@@ -36,7 +36,7 @@ export function createRouting(options) {
   const {
     store, analytics, client, registry, lingo, arkdb, memory, state,
     includeSelf, tracksGroup, trackedGroups,
-    quietEnabled, quietStart, quietEnd, backfillMaxHours, backfillStaggerMs = 800, backfillMinOfflineMinutes = 10,
+    quietEnabled, quietStart, quietEnd, backfillMaxHours, backfillStaggerMs = 300, backfillMinOfflineMinutes = 5,
   } = options;
 
   /**
@@ -120,16 +120,16 @@ export function createRouting(options) {
     let pulled = 0;
     for (const gid of groups) {
       const sinceTs = Math.max(store.getLastSeenTs(gid), maxAgo);
-      // 风控降险（2026-09）：水位较新（5 分钟内）的群跳过补拉——避免频繁重启时对全部群
-      // 反复拉历史（get_group_msg_history 是高风险接口）；短暂缺口由连上后的实时消息流覆盖
-      if (nowSec - sinceTs < 300) {
+      // 风控降险（2026-09，2026-10 放宽）：水位较新（2 分钟内）的群跳过补拉——避免频繁重启时
+      // 对全部群反复拉历史（get_group_msg_history 是高风险接口）；短暂缺口由连上后的实时消息流覆盖
+      if (nowSec - sinceTs < 120) {
         log(`[backfill] 群 ${gid} 水位较新（${fmtFull(new Date(sinceTs * 1000))}），跳过补拉`);
         continue;
       }
       if (pulled > 0 && backfillStaggerMs > 0) await new Promise((r) => setTimeout(r, backfillStaggerMs)); // 群间错峰，降低连续拉历史的风控风险
       pulled++;
       try {
-        const resp = await client.getGroupMsgHistory(gid, { messageSeq: 0, count: 100 });
+        const resp = await client.getGroupMsgHistory(gid, { messageSeq: 0, count: 200 });
         const msgs = resp?.messages ?? resp?.data ?? [];
         let added = 0;
         let earliest = 0;
@@ -160,6 +160,9 @@ export function createRouting(options) {
   // 事件路由链 S1–S13（architecture §4）：收到任意 WS 事件按序逐条判定，命中即 return；
   // 注意 S5「入库先于一切」——非 @、静默时段的消息也照常入库计数，只是不回复
   function onEvent(event) {
+    // 在线心跳（节流至每分钟一次落盘）：让 backfill 能准确判断本次启动前的离线时长
+    // （长跑实例重启不算长时间离线 → 跳过历史拉取，风控降险）
+    store.touchConnected?.();
     if (event.post_type === 'meta_event') {
       // S1 lifecycle/connect（WS open 后 napcat 自行合成）：置 ready/wsConnected，回填 selfId（若为 0），
       // 随后异步 backfillHistory（仅此一次）
@@ -243,16 +246,22 @@ export function createRouting(options) {
     // 故分发不再有落空路径——原「严格 null 才落 chat」边界内化为分发带末端（行为不变：LLM 兜底
     // 仍最晚执行、仍不 await、失败回退文案照发），见 plugins/chat.js
     const senderName = event.sender?.card || event.sender?.nickname || '群友';
+    // 消息里的表情段 ID（保留顺序；供 chat 侧识别「给我贴/发<表情图>」，见 plugins/chat.js buildMessages 附注）
+    const faceIds = Array.isArray(event.message)
+      ? event.message.filter((seg) => seg?.type === 'face' && seg.data?.id !== undefined).map((seg) => String(seg.data.id))
+      : [];
     const cmdReply = registry.dispatch({
       lingo: lingo,
       arkdb: arkdb,
       memory,
       analytics,
+      client,
       groupId: event.group_id,
       userId: event.user_id,
       userName: senderName,
       messageId: rec.id,
       text: question,
+      faces: faceIds,
     });
     if (typeof cmdReply === 'string') {
       log(`[group ${event.group_id}] 指令响应: ${question.slice(0, 30)}`);

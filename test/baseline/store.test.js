@@ -187,6 +187,17 @@ describe('MessageStore 实时落盘（addMessage）', () => {
     assert.equal(new MessageStore(dir).getLastConnectedAt(), 0); // 损坏按 0
   });
 
+  it('touchConnected：在线心跳节流（60s 内只落盘一次）', (t) => {
+    const dir = makeTmp();
+    const store = new MessageStore(dir);
+    store.touchConnected(1000);
+    assert.equal(store.getLastConnectedAt(), 1000);
+    store.touchConnected(1030); // 30s 后：节流跳过
+    assert.equal(store.getLastConnectedAt(), 1000);
+    store.touchConnected(1061); // 61s 后：写入
+    assert.equal(store.getLastConnectedAt(), 1061);
+  });
+
   it('lastSeen/lastSummaryAt 状态文件损坏一律按空/0 降级', (t) => {
     const dir = makeTmp();
     fs.mkdirSync(path.join(dir, 'state'), { recursive: true });

@@ -26,14 +26,14 @@ export class NapCatClient {
    * @param {number} [opts.selfId=0] - 机器人自身 QQ（未回填前为 0，routing S1 connect 后 getLoginInfo 回填）
    * @param {string} [opts.accessToken=''] - 连接鉴权 token；非空时拼 ?access_token= 查询参数
    * @param {number} [opts.reconnectDelay=3000] - 断线自动重连初始间隔（ms；指数退避起点）
-   * @param {number} [opts.maxReconnectDelay=60000] - 退避上限（ms）
+   * @param {number} [opts.maxReconnectDelay=30000] - 退避上限（ms）
    */
   constructor(url, opts = {}) {
     this.url = url;
     this.selfId = opts.selfId ?? 0;
     this.accessToken = opts.accessToken ?? '';
     this.reconnectDelay = opts.reconnectDelay ?? 3000;
-    this.maxReconnectDelay = opts.maxReconnectDelay ?? 60000;
+    this.maxReconnectDelay = opts.maxReconnectDelay ?? 30000;
     this._curDelay = this.reconnectDelay; // 当前退避延迟（连上复位、每次失败翻倍）
     // 当前 WS 连接（未连接或正在等待重连期间为 null）
     this.ws = null;

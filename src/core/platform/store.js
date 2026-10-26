@@ -125,6 +125,8 @@ export class MessageStore {
     // v1 旧形状（{"lastSeenTs": n}）读入时的进程内回退值：本次启动新出现的群在
     // 首写 v2 文件前都按它起水位；v2 文件已存在时恒 0（见 _loadLastSeen）
     this._legacyV1 = 0;
+    // 在线心跳节流用：上次写 runtime.json lastConnectedAt 的秒级时间（touchConnected）
+    this._lastConnectedWrite = 0;
     this._loadLastSeen();
   }
 
@@ -165,6 +167,19 @@ export class MessageStore {
     } catch {
       /* 忽略 */
     }
+  }
+
+  /**
+   * 在线心跳（节流）：收到任意 WS 事件时调用，最多每分钟落盘一次 lastConnectedAt——
+   * 使 backfill 能准确判断「本次启动前离线了多久」（长跑实例重启不算长时间离线）。
+   * @param {number} [ts=当前秒] - 秒级时间戳
+   * @returns {void}
+   * 副作用: 距上次写入 ≥60s 时覆盖写 data/state/runtime.json
+   */
+  touchConnected(ts = Math.floor(Date.now() / 1000)) {
+    if (ts - this._lastConnectedWrite < 60) return;
+    this._lastConnectedWrite = ts;
+    this.setLastConnectedAt(ts);
   }
 
   // v1→v2 迁移播种来源：扫 messages/ 顶层群目录（目录 = 磁盘上出现过的群）。
