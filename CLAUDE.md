@@ -26,6 +26,8 @@ QQ 对自动化账号有阶梯式风控（提示 → 限制 → 冻结 7/30 天 
 4. **高风险接口清单**（改动前评估频率）：`get_group_msg_history`（backfill）、`set_msg_emoji_like`（贴表情）、`send_group_msg`（发送）。
 5. **降险机制不得回退**（改相关代码时保持；2026-10 已按需放宽到「适中」档）：
    - backfill：离线 < `backfill.minOfflineMinutes`（默认 5 分钟）整体跳过；单群水位 < 2 分钟跳过；单群 `count: 200`；群间错峰 `backfillStaggerMs`（默认 300ms）
+   - backfill 触发时序（2026-10 实测修复）：离线水位必须在 `store.touchConnected()` **之前**读（routing.onEvent 顶部），读晚一步会被心跳覆盖成 now → 补偿恒跳过；`backfillDone` 在 disconnect 时复位，长断线重连能再补一次，短断线仍由 5 分钟门槛挡住
+   - 数据刷新：`.tmp` → rename 原子替换，成功后清历史 `.bak`（不再每次留一份 39MB 旧表）
    - 重连：指数退避 3s→30s 封顶（core/platform/napcat.js）
    - 贴表情：同群冷却 `emojiLike.cooldownSeconds`（默认 5s）
    - 发表情消息：同群发送间隔 `emojiLike.sendCooldownSeconds`（默认 3s，排队节流不丢弃）
