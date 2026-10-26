@@ -16,14 +16,15 @@ import { silenceLog } from '../helpers.js';
 
 after(silenceLog());
 
-/** 起一个本地 WS 服务端；handler(ws, msg, raw) 决定怎么回 */
-function mkServer(handler) {
+/** 起一个本地 WS 服务端；handler(ws, msg) 处理调用帧，onConn(ws) 在新连接建立时执行 */
+function mkServer(handler, onConn) {
   const wss = new WebSocketServer({ port: 0 });
   const sockets = new Set();
   wss.on('connection', (ws) => {
     sockets.add(ws);
     ws.on('close', () => sockets.delete(ws));
     ws.on('message', (raw) => handler(ws, JSON.parse(raw.toString())));
+    onConn?.(ws);
   });
   return new Promise((resolve) => {
     wss.once('listening', () => resolve({
@@ -98,6 +99,46 @@ describe('NapCatClient 调用结算', () => {
       await settled;
       assert.equal(client.pending.size, 0);
     } finally {
+      await srv.close();
+    }
+  });
+});
+
+describe('NapCatClient 重连退避', () => {
+  test('连上就断：退避不复位，延迟逐次翻倍（3s 高频重连回归）', async () => {
+    // 每次连接 20ms 后就断：模拟 NapCat 反复重启/鉴权失败时「连上即断」
+    const srv = await mkServer(() => {}, (ws) => setTimeout(() => ws.close(), 20));
+    const client = new NapCatClient(`ws://127.0.0.1:${srv.port}`, {
+      reconnectDelay: 20, maxReconnectDelay: 200, resetBackoffAfterMs: 10000,
+    });
+    const delaysAtOpen = [];
+    client.onEvent((e) => {
+      if (e.meta_event_type === 'lifecycle' && e.sub_type === 'connect') delaysAtOpen.push(client._curDelay);
+    });
+    client.connect();
+    try {
+      await new Promise((r) => setTimeout(r, 400));
+      assert.ok(delaysAtOpen.length >= 3, `应至少重连两次，实际 ${delaysAtOpen.length} 次`);
+      // 旧实现 open 即复位 → 每次都是 20；新实现 20→40→80
+      assert.ok(delaysAtOpen[2] > delaysAtOpen[0], `退避应增长，实际 ${delaysAtOpen.join('→')}`);
+    } finally {
+      client.close();
+      await srv.close();
+    }
+  });
+
+  test('连接稳定超过 resetBackoffAfterMs：退避复位到起点', async () => {
+    const srv = await mkServer(() => { /* 保持连接 */ });
+    const client = new NapCatClient(`ws://127.0.0.1:${srv.port}`, { reconnectDelay: 20, resetBackoffAfterMs: 60 });
+    client._curDelay = 160; // 模拟此前已退避到 160ms
+    try {
+      const connected = waitConnect(client);
+      client.connect();
+      await connected;
+      await new Promise((r) => setTimeout(r, 140));
+      assert.equal(client._curDelay, 20); // 稳定 60ms 后复位
+    } finally {
+      client.close();
       await srv.close();
     }
   });

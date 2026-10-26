@@ -27,6 +27,7 @@ export class NapCatClient {
    * @param {string} [opts.accessToken=''] - 连接鉴权 token；非空时拼 ?access_token= 查询参数
    * @param {number} [opts.reconnectDelay=3000] - 断线自动重连初始间隔（ms；指数退避起点）
    * @param {number} [opts.maxReconnectDelay=30000] - 退避上限（ms）
+   * @param {number} [opts.resetBackoffAfterMs=30000] - 连接持续多久才把退避复位到起点（ms）
    */
   constructor(url, opts = {}) {
     this.url = url;
@@ -34,7 +35,9 @@ export class NapCatClient {
     this.accessToken = opts.accessToken ?? '';
     this.reconnectDelay = opts.reconnectDelay ?? 3000;
     this.maxReconnectDelay = opts.maxReconnectDelay ?? 30000;
-    this._curDelay = this.reconnectDelay; // 当前退避延迟（连上复位、每次失败翻倍）
+    this.resetBackoffAfterMs = opts.resetBackoffAfterMs ?? 30000;
+    this._curDelay = this.reconnectDelay; // 当前退避延迟（连接稳定后复位、每次失败翻倍）
+    this._stableTimer = null;             // 「连接已稳定」定时器（open 后启动、close 时清掉）
     // 当前 WS 连接（未连接或正在等待重连期间为 null）
     this.ws = null;
     // 出站调用序号：每次 call 自增一次，作为该次调用的 echo 关联键
@@ -62,8 +65,8 @@ export class NapCatClient {
 
   /**
    * 建立（或重连）WS 连接并挂接 open/message/error/close 处理器。
-   * open → 合成并派发 lifecycle/connect 事件并复位退避；close 且未被 close() 关停 →
-   * 按当前退避延迟（3s 起、每次失败翻倍、上限 60s）重连（重复调用本方法即为一次重连）。
+   * open → 合成并派发 lifecycle/connect 事件（退避持续稳定 resetBackoffAfterMs 后才复位）；
+   * close 且未被 close() 关停 → 按当前退避延迟（3s 起、每次失败翻倍、上限 30s）重连。
    * @returns {void}
    * 副作用: 打开 WS 连接；断线时安排自动重连定时器
    */
@@ -75,12 +78,20 @@ export class NapCatClient {
     this.ws = new WebSocket(wsUrl);
     this.ws.on('open', () => {
       log(`[napcat] 已连接 ${wsUrl}`);
-      this._curDelay = this.reconnectDelay; // 连上即复位退避
+      // 退避不在 open 时立刻复位：对端「连上就断」（NapCat 重启/鉴权失败）会让退避永远停在
+      // 起点，退化成 3s 高频重连（2026-09 曾单日 1.5 万次）。连接稳定 resetBackoffAfterMs
+      // 后才复位；中途断开则继续按之前的延迟翻倍。
+      clearTimeout(this._stableTimer);
+      this._stableTimer = setTimeout(() => {
+        this._curDelay = this.reconnectDelay;
+        log(`[napcat] 连接稳定 ${Math.round(this.resetBackoffAfterMs / 1000)}s，重连退避已复位`);
+      }, this.resetBackoffAfterMs);
       this.emit({ post_type: 'meta_event', meta_event_type: 'lifecycle', sub_type: 'connect' });
     });
     this.ws.on('message', (data) => this._onMessage(data));
     this.ws.on('error', (e) => console.error('[napcat] ws error:', e.message));
     this.ws.on('close', () => {
+      clearTimeout(this._stableTimer);
       if (this.closed) return;
       // 合成 lifecycle/disconnect（与 connect 同例）：routing S1 收到后复位 wsConnected，
       // 状态页不再显示断线「在线」假象（2026-09 立项修复，见 architecture §8 坑 2）
@@ -328,6 +339,7 @@ export class NapCatClient {
    */
   close() {
     this.closed = true;
+    clearTimeout(this._stableTimer);
     if (this.ws) this.ws.close();
     this._rejectPending(new Error('客户端已关闭，调用取消'));
   }
