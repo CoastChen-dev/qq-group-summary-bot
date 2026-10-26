@@ -4,7 +4,7 @@
  * 职责：连接 NapCat 的 WS 端口（有 token 时拼 ?access_token=）并断线自动重连；
  * 把服务端推送的 post_type 事件逐条派发给 onEvent 注册的回调；出站 action 走
  * call(action, params)——echo 关联响应，15s 无响应按超时 reject、WS 未 OPEN
- * 直接 reject。注意本客户端无应用层心跳：NapCat 定期下发的心跳 meta_event 到达后
+ * 直接 reject；连接断开或 close() 时在途调用立即 reject（不再各自等满 15s）。注意本客户端无应用层心跳：NapCat 定期下发的心跳 meta_event 到达后
  * 因不含 lifecycle 分支而被上层事件处理函数忽略（详见 docs/external-apis.md §1）。
  *
  * 对外导出：类 NapCatClient，仅由 core/runtime.js 的 createApp 装配一次。
@@ -85,6 +85,9 @@ export class NapCatClient {
       // 合成 lifecycle/disconnect（与 connect 同例）：routing S1 收到后复位 wsConnected，
       // 状态页不再显示断线「在线」假象（2026-09 立项修复，见 architecture §8 坑 2）
       this.emit({ post_type: 'meta_event', meta_event_type: 'lifecycle', sub_type: 'disconnect' });
+      // 在途调用立即失败（不等 15s 超时）：断线后这些响应永远不会到达，攒着只会让
+      // 上层指令/发送挂到超时才报错（2026-10）
+      this._rejectPending(new Error('WS 连接已断开，调用取消'));
       // 风控降险（2026-09）：指数退避（3s→6s→12s→…→60s 封顶）——NapCat/账号长时间离线时
       // 不再每 3s 高频重试（曾出现单日 1.5 万次重连的异常连接模式）
       log(`[napcat] 连接断开，${this._curDelay / 1000}s 后重连...`);
@@ -110,8 +113,9 @@ export class NapCatClient {
     }
 
     if (msg.echo !== undefined && this.pending.has(msg.echo)) {
-      const { resolve, reject } = this.pending.get(msg.echo);
+      const { resolve, reject, timer } = this.pending.get(msg.echo);
       this.pending.delete(msg.echo);
+      clearTimeout(timer); // 结算即清超时定时器（否则每次调用都留一个 15s 空转 timer）
       if (msg.status === 'ok' && msg.retcode === 0) resolve(msg.data ?? {});
       else reject(new Error(`OneBot 返回错误: retcode=${msg.retcode} ${msg.message || ''}`));
       return;
@@ -154,15 +158,24 @@ export class NapCatClient {
         reject(new Error(`WS 未连接，无法调用 ${action}`));
         return;
       }
-      this.pending.set(echo, { resolve, reject });
-      this.ws.send(JSON.stringify({ action, params, echo }));
-      setTimeout(() => {
+      const timer = setTimeout(() => {
         if (this.pending.has(echo)) {
           this.pending.delete(echo);
           reject(new Error(`调用 ${action} 超时`));
         }
       }, 15000);
+      this.pending.set(echo, { resolve, reject, timer });
+      this.ws.send(JSON.stringify({ action, params, echo }));
     });
+  }
+
+  // 内部：把在途调用全部按 err 拒绝并清掉超时定时器（断线/主动关停时用）
+  _rejectPending(err) {
+    for (const { reject, timer } of this.pending.values()) {
+      clearTimeout(timer);
+      reject(err);
+    }
+    this.pending.clear();
   }
 
   /**
@@ -316,5 +329,6 @@ export class NapCatClient {
   close() {
     this.closed = true;
     if (this.ws) this.ws.close();
+    this._rejectPending(new Error('客户端已关闭，调用取消'));
   }
 }
