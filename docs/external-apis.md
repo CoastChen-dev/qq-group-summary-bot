@@ -15,7 +15,10 @@
 | `getLoginInfo` | `get_login_info` | — | 回填 selfId |
 | `sendGroupMsg` | `send_group_msg` | `auto_escape: true` | 群播报（纯文本，不 @） |
 | `sendGroupMsgAt` | `send_group_msg` | 段式 `[at, text]` | 回答提问者（真 @；S10/S12 指令回复、chat LLM 回复、refresh 手动回执） |
-| `sendPrivateMsg` | `send_private_msg` | `auto_escape: true` | 日报私聊 |
+| `sendPrivateMsg` | `send_private_msg` | `auto_escape: true` | 日报私聊（转发失败时的回退） |
+| `sendGroupForward` | `send_group_forward_msg` | `{group_id, messages:[node]}` | 抽卡长结果合并转发（每节点 ≤5 行） |
+| `sendPrivateForward` | `send_private_forward_msg` | `{user_id, messages:[node]}` | 每日日报合并转发（标题+每群一节点） |
+| `sendGroupFaces` | `send_group_msg` | 段式：QQ 表情 `{type:'face'}`、Unicode 转 `{type:'text'}`（多表情合并一条；实测 face 段直发码点会 1200） | 发表情工具 `send_face` |
 | `setMsgEmojiLike` | `set_msg_emoji_like` | `message_id`, `emoji_id`（QQ 黄脸小数字 ID 如 `'14'`／Unicode 码点串如 `'128077'`，均实测可用）, `set: true` | LLM 工具 `react_emoji` 调用（贴表情） |
 | `getGroupInfo` | `get_group_info` | — | 日报标题取群名 |
 | `getGroupMsgHistory` | `get_group_msg_history` | `message_seq:0, count:1000` | backfill 补偿拉取 |

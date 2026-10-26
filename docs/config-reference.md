@@ -25,17 +25,19 @@
 | `report.userId` | number | `0`（= 不发送） | report 插件（plugins/report.js） | 日报私聊接收 QQ（**必填**才发日报） |
 | `report.minMessages` | number | `100` | report 插件 | 昨日消息数 ≥ 该值的群才生成日报 |
 | `report.hour` / `report.minute` | number | `9` / `0` | Scheduler（core/platform/scheduler.js，经 runtime 装配传参） | 日报触发时刻（2026-09 修复后生效；旧 `schedule.*` 死键已废弃，见备忘） |
+| `owner.userId` | number | `0` | runtime（createChatTools 装配） | 主人 QQ：文档/提示词读写工具仅此账号可用（0 = 禁用该组工具；不填时回退 `report.userId`） |
 | `quiet.enabled` | boolean | `true` | routing（S7） | 静默时段开关 |
 | `quiet.start` / `quiet.end` | number | `0` / `8` | routing（S7） | 小时制 `[start, end)`；start>end 视为跨零点 |
 | `emojiLike.enabled` | boolean | `true` | runtime（createChatTools 装配） | LLM 工具 `react_emoji`（贴表情）开关；false 时工具回「贴表情功能未启用」 |
-| `emojiLike.cooldownSeconds` | number | `60` | runtime（createChatTools 装配） | 同群贴表情冷却秒数（风控降险；0 = 不限） |
+| `emojiLike.cooldownSeconds` | number | `5` | runtime（createChatTools 装配） | 同群贴表情冷却秒数（风控降险；0 = 不限） |
+| `emojiLike.sendCooldownSeconds` | number | `3` | runtime（createChatTools 装配） | 同群发表情消息最小发送间隔秒数（排队节流不丢弃；0 = 不限） |
 | `tools.enabled` | boolean | `true` | ChatBrain（plugins/chat.js） | LLM 工具调用总开关（false 时请求不带 tools，仅纯聊天） |
 | `tools.maxRounds` | number | `3` | ChatBrain | 工具调用轮次上限（超出后末轮不带工具强制收口） |
 | `minMessages` | number | `1` | summary 插件（doSummary） | 手动总结低于该消息条数时跳过 |
 | `includeSelf` | boolean | `false` | routing（S3） | `true` 时机器人自己的消息也计入 |
 | `commands.manualSummary` | string[] | `['总结','/总结','#总结']` | summary 插件（分发带 900） | 手动总结触发关键词（剥 @ 后问题文本 includes 判定） |
 | `backfill.maxHours` | number | `72` | routing backfillHistory（core/routing.js） | 每群 lastSeen 的兜底上限；实际从该群 lastSeen 时刻起拉（按群水位，坑 9 修复后） |
-| `backfill.minOfflineMinutes` | number | `10` | routing backfillHistory | 距上次在线短于该分钟数（短暂重启）时**整体跳过**补拉（风控降险） |
+| `backfill.minOfflineMinutes` | number | `5` | routing backfillHistory | 距上次在线短于该分钟数（短暂重启）时**整体跳过**补拉（风控降险） |
 | `dataRefresh.enabled` | boolean | `true` | refresh 插件（hooks.start 定时器） | 数据定期更新总开关（`!== false` 视为开） |
 | `dataRefresh.intervalHours` | number | `24` | refresh 插件 | 自动刷新间隔 |
 | `dataRefresh.firstDelayMinutes` | number | `30` | refresh 插件 | 首次刷新延迟（启动后） |
@@ -68,6 +70,9 @@
 | `llm.chatHistoryLimit` | number | `12` | ChatBrain | 每群保留的上下文条数 |
 | `llm.chatConcurrency` | number | `3` | ChatBrain | LLM 请求并发上限（信号量） |
 | `llm.retrievalGate` | boolean | `true` | ChatBrain | 检索门：闲聊消息跳过通用检索（提速）；false 恢复总是检索（`!== false` 视为开） |
+| `llm.thinking` | boolean \| `'auto'` | `'auto'` | ChatBrain | 深度思考：`true` 恒开 / `false` 恒关 / `auto` 仅重问题（数学/证明/代码类，见 `HEAVY_RE`）开启 |
+| `llm.reasoningEffort` | string | `''` | ChatBrain | 思考强度（如 `high`，透传 `reasoning_effort`；空则用服务端默认） |
+| `llm.thinkingMaxTokens` | number | `8192` | ChatBrain | 思考调用的输出预算（**思维链计入输出**，预算不足会只出思维链、正文为空 → 自动回退非思考重试） |
 | `llm.wikiTimeoutMs` / `moegirlTimeoutMs` / `wikipediaTimeoutMs` | number | `5000` | ChatBrain | 三源并行检索的单源超时上限（example 未列，代码支持） |
 | `llm.defaultReply` | string | 内置文案 | ChatBrain | LLM 调用失败时的兜底回复（照发） |
 | `llm.lingoFile` | string | `<root>/data/lingo.json` | LingoStore（core/knowledge/lingo.js） | 相对路径按 cwd 解析（与 arkdbDir/cacheFile 一致） |

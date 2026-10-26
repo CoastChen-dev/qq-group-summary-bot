@@ -224,6 +224,70 @@ export class NapCatClient {
   }
 
   /**
+   * 修改机器人全局昵称（QQ 资料卡昵称，`set_qq_profile`）——LLM 工具 set_nickname 出口。
+   * @param {string} nickname - 新昵称（调用方已做长度/敏感词校验）
+   * @returns {Promise<Object>} 调用结果
+   */
+  setSelfNickname(nickname) {
+    return this.call('set_qq_profile', { nickname: String(nickname) });
+  }
+
+  /**
+   * 修改机器人个性签名（`set_self_longnick`，NapCat 参数名 longNick）——LLM 工具 set_signature 出口。
+   * @param {string} longNick - 新签名（调用方已做长度校验）
+   * @returns {Promise<Object>} 调用结果
+   */
+  setSelfLongNick(longNick) {
+    return this.call('set_self_longnick', { longNick: String(longNick) });
+  }
+
+  /**
+   * 修改机器人在本群的名片（`set_group_card`，仅自己）——LLM 工具 set_group_card 出口。
+   * @param {string|number} groupId - 群号
+   * @param {string} card - 新名片（调用方已做长度校验）
+   * @returns {Promise<Object>} 调用结果
+   */
+  setGroupCard(groupId, card) {
+    return this.call('set_group_card', { group_id: groupId, user_id: Number(this.selfId), card: String(card) });
+  }
+
+  /**
+   * 发群合并转发（聊天记录卡片；`send_group_forward_msg`）——抽卡长结果等场景用。
+   * @param {string|number} groupId - 目标群号
+   * @param {Object[]} nodes - 节点数组 [{type:'node', data:{uin, name, content}}]
+   *   （content 可为字符串或段数组；已实测）
+   * @returns {Promise<Object>} 调用结果（含 message_id）
+   */
+  sendGroupForward(groupId, nodes) {
+    return this.call('send_group_forward_msg', { group_id: groupId, messages: nodes });
+  }
+
+  /**
+   * 私聊合并转发（`send_private_forward_msg`）——每日日报「每群一条消息」用。
+   * @param {string|number} userId - 目标 QQ 号
+   * @param {Object[]} nodes - 节点数组 [{type:'node', data:{uin, name, content}}]
+   * @returns {Promise<Object>} 调用结果
+   */
+  sendPrivateForward(userId, nodes) {
+    return this.call('send_private_forward_msg', { user_id: userId, messages: nodes });
+  }
+
+  /**
+   * 发一条表情消息（LLM 工具 send_face 出口；多个表情合并为一条）。
+   * QQ 表情走段式 `{type:'face'}`；Unicode 表情（ID 长度 > 3 的码点）转 `{type:'text'}`
+   * —— 实测 face 段直接发 Unicode 码点会被 QQ 拒（retcode=1200 消息体无法解析）。
+   * @param {string|number} groupId - 目标群号
+   * @param {Array<{id: string, char?: string}>} items - 表情项（id 见 core/platform/emoji.js；char = Unicode 字符）
+   * @returns {Promise<Object>} 调用结果
+   */
+  sendGroupFaces(groupId, items) {
+    const message = (items || []).map((it) => (String(it.id).length > 3
+      ? { type: 'text', data: { text: String(it.char || '') } }
+      : { type: 'face', data: { id: String(it.id) } }));
+    return this.call('send_group_msg', { group_id: groupId, message });
+  }
+
+  /**
    * 查群资料（日报取群名作标题用，plugins/report.js dailyReport）。
    * @param {string|number} groupId - 群号
    * @returns {Promise<Object>} 形如 {group_id, group_name}

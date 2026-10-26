@@ -119,11 +119,22 @@ export function createApp(config, overrides = {}) {
     analytics,
     usermem: memory,
     react: emojiLikeEnabled ? (messageId, emojiId) => client.setMsgEmojiLike(messageId, emojiId) : null,
-    emojiCooldownMs: Math.max(0, Number(config.emojiLike?.cooldownSeconds ?? 60)) * 1000, // 同群贴表情冷却（风控降险）
+    emojiCooldownMs: Math.max(0, Number(config.emojiLike?.cooldownSeconds ?? 5)) * 1000, // 同群贴表情冷却（风控降险；2026-10 起默认 5s）
+    faceCooldownMs: Math.max(0, Number(config.emojiLike?.sendCooldownSeconds ?? 3)) * 1000, // 同群发表情消息发送间隔（排队节流；默认 3s）
+    sendFace: (groupId, items) => client.sendGroupFaces(groupId, items), // 发表情工具出口（多表情一条；Unicode 转文本）
+    // 自我资料修改出口（LLM 自主决定；冷却/内容校验在工具内）与文档/提示词编辑（仅主人；projectRoot 为白名单根）
+    profile: {
+      setNickname: (name) => client.setSelfNickname(name),
+      setLongNick: (text) => client.setSelfLongNick(text),
+      setGroupCard: (gid, card) => client.setGroupCard(gid, card),
+    },
+    ownerId: config.owner?.userId ?? config.report?.userId ?? 0,
+    projectRoot: root,
   });
   const brain = overrides.brain || new ChatBrain({
     cfg: llm, lingo, arkdb, cache, wiki, moegirl, wikipedia, webSearch, usermem: memory, memoryCfg,
     tools, toolsCfg: config.tools || {},
+    systemPromptFile: path.join(root, 'prompts', 'chat-system.md'), // 人格提示词文件（缺失回退内置默认）
   });
 
   // 群路由相关配置常量（自 config.json 派生；groups 空数组 = 跟踪全部群）
@@ -166,7 +177,7 @@ export function createApp(config, overrides = {}) {
     includeSelf, tracksGroup, trackedGroups,
     quietEnabled, quietStart, quietEnd,
     backfillMaxHours: config.backfill?.maxHours ?? 72,
-    backfillMinOfflineMinutes: config.backfill?.minOfflineMinutes ?? 10,
+    backfillMinOfflineMinutes: config.backfill?.minOfflineMinutes ?? 5,
   });
   const summaryPlugin = createSummaryPlugin({
     store, summarizer, client, filterMessages,

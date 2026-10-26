@@ -9,6 +9,7 @@
  */
 import { after, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
 import path from 'node:path';
 
 import { ChatBrain, createChatTools } from '../../src/plugins/chat.js';
@@ -226,6 +227,57 @@ describe('ChatBrain 工具调用（function calling）', () => {
     }
   });
 
+  it('深度思考（llm.thinking=auto）：重问题带 thinking 参数、闲聊不带；false 恒关、true 恒开', async () => {
+    const bodies = [];
+    const origFetch = global.fetch;
+    global.fetch = async (url, opts) => {
+      bodies.push(JSON.parse(opts.body));
+      return new Response(JSON.stringify({ choices: [{ message: { role: 'assistant', content: '好的' } }] }), { status: 200 });
+    };
+    try {
+      const auto = new ChatBrain({ cfg: { apiKey: 'k' } }); // 默认 auto
+      await auto._llmChat([{ role: 'user', content: 'x' }], { heavy: true });
+      await auto._llmChat([{ role: 'user', content: 'x' }], { heavy: false });
+      assert.equal(bodies[0].thinking?.type, 'enabled'); // 重问题（数学/证明）→ 思考
+      assert.equal(bodies[1].thinking, undefined);       // 闲聊 → 不思考
+
+      const off = new ChatBrain({ cfg: { apiKey: 'k', thinking: false } });
+      await off._llmChat([{ role: 'user', content: 'x' }], { heavy: true });
+      assert.equal(bodies[2].thinking, undefined);       // 显式关闭
+
+      const on = new ChatBrain({ cfg: { apiKey: 'k', thinking: true, reasoningEffort: 'high' } });
+      await on._llmChat([{ role: 'user', content: 'x' }], { heavy: false });
+      assert.equal(bodies[3].thinking?.type, 'enabled'); // 恒开
+      assert.equal(bodies[3].reasoning_effort, 'high');
+    } finally {
+      global.fetch = origFetch;
+    }
+  });
+
+  it('思考模式正文为空：自动回退非思考模式重试（预算耗尽保护）', async () => {
+    const bodies = [];
+    let call = 0;
+    const brain = new ChatBrain({ cfg: { apiKey: 'k', thinking: true } });
+    const origFetch = global.fetch;
+    global.fetch = async (url, opts) => {
+      bodies.push(JSON.parse(opts.body));
+      call++;
+      if (call === 1) {
+        return new Response(JSON.stringify({ choices: [{ message: { role: 'assistant', content: '', reasoning_content: '思维链...' }, finish_reason: 'length' }] }), { status: 200 });
+      }
+      return new Response(JSON.stringify({ choices: [{ message: { role: 'assistant', content: '回退后的回答' } }] }), { status: 200 });
+    };
+    try {
+      const reply = await brain._llmChat([{ role: 'user', content: 'x' }], { heavy: true });
+      assert.equal(reply, '回退后的回答');
+      assert.equal(bodies.length, 2);
+      assert.equal(bodies[0].thinking?.type, 'enabled');
+      assert.equal(bodies[1].thinking, undefined); // 回退请求不带思考
+    } finally {
+      global.fetch = origFetch;
+    }
+  });
+
   it('chat() 全链回归：messageId 透传到工具（曾因最终 _reply 漏传 opts 导致贴表情无法定位）', async () => {
     const reacted = [];
     const brain = new ChatBrain({
@@ -260,5 +312,91 @@ describe('ChatBrain 工具调用（function calling）', () => {
     } finally {
       global.fetch = origFetch;
     }
+  });
+
+  it('createChatTools：表外单码点 Unicode 表情兜底为码点 ID（react / send_face 通用）', async () => {
+    const reacted = [];
+    const reactTool = createChatTools({ react: async (mid, id) => reacted.push(id) }).find((t) => t.name === 'react_emoji');
+    assert.equal(await reactTool.handler({ emoji: '🫛' }, { messageId: 'm1' }), '已给当前消息贴上表情：🫛');
+    assert.deepEqual(reacted, ['129755']); // U+1FADB
+    const sent = [];
+    const faceTool = createChatTools({ sendFace: async (gid, items) => sent.push(items) }).find((t) => t.name === 'send_face');
+    assert.equal(await faceTool.handler({ emoji: '🫛' }, { groupId: 'g1' }), '已发送表情：🫛');
+    assert.deepEqual(sent, [[{ id: '129755', char: '🫛' }]]);
+  });
+
+  it('createChatTools：send_face 多名称合并一条 + 排队节流（不丢弃、按间隔发送）', async () => {
+    const sent = [];
+    const faceTool = createChatTools({
+      sendFace: async (gid, items) => sent.push([gid, items]),
+      faceCooldownMs: 30,
+    }).find((t) => t.name === 'send_face');
+    assert.equal(await faceTool.handler({ emoji: '吃瓜' }, { groupId: 'g1' }), '已发送表情：吃瓜');
+    assert.equal(await faceTool.handler({ emoji: '微笑' }, { groupId: 'g1' }), '已发送表情：微笑'); // 排队不丢弃
+    assert.equal(await faceTool.handler({ emoji: '微笑、比心' }, { groupId: 'g1' }), '已发送表情：微笑、比心'); // 多名称合并
+    assert.equal(await faceTool.handler({ emoji: '微笑,吃瓜,不存在' }, { groupId: 'g1' }), '已发送表情：微笑、吃瓜（未找到：不存在）');
+    await new Promise((r) => setTimeout(r, 250)); // 等队列按 30ms 间隔发完 4 批
+    assert.equal(sent.length, 4);
+    assert.deepEqual(sent[0], ['g1', [{ id: '271', char: '吃瓜' }]]);
+    assert.deepEqual(sent[1], ['g1', [{ id: '14', char: '微笑' }]]);
+    assert.deepEqual(sent[2], ['g1', [{ id: '14', char: '微笑' }, { id: '319', char: '比心' }]]);
+    assert.deepEqual(sent[3], ['g1', [{ id: '14', char: '微笑' }, { id: '271', char: '吃瓜' }]]);
+    assert.ok((await faceTool.handler({ emoji: '不存在' }, { groupId: 'g2' })).includes('没有找到表情'));
+    assert.equal(await faceTool.handler({ emoji: '微笑' }, {}), '当前不在群里，发不了表情');
+  });
+
+  it('人格提示词文件：加载、mtime 变化热重载、删除回退内置默认', (t) => {
+    const dir = makeTmp();
+    const file = path.join(dir, 'prompt.md');
+    fs.writeFileSync(file, '第一版人设');
+    const brain = new ChatBrain({ cfg: {}, systemPromptFile: file });
+    let sys = brain.buildMessages('g1', '张三', 'hi', '', 'u9')[0].content;
+    assert.ok(sys.startsWith('第一版人设'));
+
+    fs.writeFileSync(file, '第二版人设');
+    fs.utimesSync(file, new Date(Date.now() + 2000), new Date(Date.now() + 2000)); // 确保 mtime 变化
+    sys = brain.buildMessages('g1', '张三', 'hi', '', 'u9')[0].content;
+    assert.ok(sys.startsWith('第二版人设')); // 无需重启即生效
+
+    fs.rmSync(file);
+    sys = brain.buildMessages('g1', '张三', 'hi', '', 'u9')[0].content;
+    assert.ok(sys.includes('Mon3tr')); // 回退内置默认
+  });
+
+  it('createChatTools：set_nickname 长度校验与 24h 冷却（LLM 自主改资料）', async () => {
+    const calls = [];
+    const tools = createChatTools({ profile: { setNickname: async (n) => calls.push(n), setLongNick: async () => {}, setGroupCard: async () => {} } });
+    const nick = tools.find((t) => t.name === 'set_nickname');
+    assert.equal(await nick.handler({ name: 'M' }, {}), '昵称需要 2–12 个字');
+    assert.equal(await nick.handler({ name: 'x'.repeat(13) }, {}), '昵称需要 2–12 个字');
+    assert.equal(await nick.handler({ name: '小M3' }, {}), '已把昵称改成「小M3」');
+    assert.deepEqual(calls, ['小M3']);
+    const again = await nick.handler({ name: '另一个名字' }, {});
+    assert.ok(again.includes('刚改过名字'), `冷却应阻止二次修改: ${again}`);
+    assert.equal(calls.length, 1);
+  });
+
+  it('文档/提示词工具：仅主人、白名单防穿越、写前备份', async (t) => {
+    const dir = makeTmp();
+    fs.writeFileSync(path.join(dir, 'README.md'), '旧内容');
+    const tools = createChatTools({ ownerId: '2635563213', projectRoot: dir });
+    const write = tools.find((x) => x.name === 'write_text_file');
+    const read = tools.find((x) => x.name === 'read_text_file');
+    const owner = { userId: '2635563213' };
+
+    // 非主人 / 白名单外 / 目录穿越 一律拒绝
+    assert.ok((await write.handler({ path: 'README.md', content: 'x' }, { userId: '999' })).includes('只有博士'));
+    assert.ok((await write.handler({ path: 'config.json', content: 'x' }, owner)).includes('只能'));
+    assert.ok((await write.handler({ path: 'docs/../config.json', content: 'x' }, owner)).includes('只能'));
+
+    // 主人可写；二次写前备份到 data/backups/
+    assert.ok((await write.handler({ path: 'prompts/chat-system.md', content: '新人设第一行' }, owner)).includes('已更新'));
+    assert.equal(fs.readFileSync(path.join(dir, 'prompts', 'chat-system.md'), 'utf8'), '新人设第一行');
+    await write.handler({ path: 'prompts/chat-system.md', content: '新人设第二行' }, owner);
+    assert.equal(fs.readdirSync(path.join(dir, 'data', 'backups')).length, 1);
+
+    // 读：主人可读、非主人拒绝
+    assert.equal(await read.handler({ path: 'prompts/chat-system.md' }, owner), '新人设第二行');
+    assert.ok((await read.handler({ path: 'prompts/chat-system.md' }, { userId: '1' })).includes('只有博士'));
   });
 });

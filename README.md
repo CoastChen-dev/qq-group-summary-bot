@@ -11,7 +11,7 @@
 ### 群聊概括与日报
 
 - **手动概括**：群里 @机器人 说「总结」（关键词可配 `commands.manualSummary`），LLM 生成话题/关键信息/待办/氛围四段式概括
-- **每日日报**：默认 9:00（`report.hour/minute`）自动统计昨日各群消息，把活跃群（≥100 条）日报私聊发送给指定 QQ
+- **每日日报**：默认 9:00（`report.hour/minute`）自动统计昨日各群消息，把活跃群（≥100 条）日报以**合并转发**私聊发送给指定 QQ（标题一张卡 + 每群一条消息）
 - **敏感内容过滤**：隐私信息（手机号/身份证/银行卡/邮箱/IP/密码）与不当内容在送 LLM 前过滤，出站回复再做敏感词兜底
 - **离线补偿**：按群水位补齐掉线期间错过的消息（内置风控降险节流，见下）
 
@@ -20,7 +20,9 @@
 - **人设**：凯尔希曾经的共生体、如今独立行动的罗德岛医疗干员（链愈师）——外表强大、内心单纯呆萌，会一本正经说萌话、口是心非，带动作描写与语气词
 - **实名上下文**：以群昵称识别发言者，可理解「他/她/刚才那位」指代；QQ 号绝不进入上下文
 - **用户记忆**：`记住 …` 写入（**按群隔离**，每人 20 条/全局 2000 条），对话后自动提取值得记住的信息；`我的记忆` / `忘记我` 自助管理，WebUI 可查看/删除
-- **工具调用（function calling）**：她可自主决定调用后端能力——贴表情（300+ QQ 官方表情）、查询干员/藏品/卡池/群统计、查或记用户记忆
+- **工具调用（function calling）**：她可自主决定调用后端能力——贴表情（386 QQ 官方表情 + 193 Unicode，全量无过滤）、发表情（支持一次多个、合并为一条消息）、查询干员/藏品/卡池/群统计、查或记用户记忆；认得消息里带的表情（可用同款回应/发送）
+- **自我管理**：可自主修改自己的昵称/个性签名/本群名片（带冷却与内容校验）；主人可让她修改文档与人格提示词（`prompts/chat-system.md`，**即改即生效**）——仅白名单文件，代码与配置不可触碰
+- **深度思考**：数学/证明/代码类重问题自动开启思考模式（`llm.thinking: "auto"`，可设 true/false），给出完整推导；闲聊保持快速
 - **贴表情**：回复时结合语境给消息贴一个合适的表情（同群 60s 冷却）
 - **真 @ 回复**：回答（AI 群聊、指令、刷新回执）会真 @ 提问者；总结与播报为群广播不 @
 
@@ -28,7 +30,7 @@
 
 - **本地干员库**（`data/ark/`，来自 [ArknightsGameData](https://github.com/Kengxxiao/ArknightsGameData)）：1373 干员 / 439 档案 / 807 肉鸽藏品 / 447 卡池；生日、资料、藏品效果**本地秒回**
 - **语义模糊匹配**：bigram Dice 相似度（「波登克」→「波登可」、「高卢的支票本」→「高卢银行支票」）
-- **真实卡池抽卡**：出率 6★2% / 5★8% / 4★50% / 3★40%，UP 占其星级 50%；`卡池` / `单抽` / `十连` / `抽卡记录 [N]`（最近 N 个 6★）/ `谁最欧`
+- **真实卡池抽卡**：出率 6★2% / 5★8% / 4★50% / 3★40%，UP 占其星级 50%；`卡池` / `单抽` / `十连` / `一百连`（N 连支持中文数字，上限 1000）/ `抽卡记录 [N]`（最近 N 个 6★）/ `谁最欧`；十连照常一条消息，超过 10 抽自动拆分为**合并转发**卡片（每节点一整辆十连；超大抽数按容量拆多张卡，如一千连 ≈ 3 张）
 - **数据自动更新**：每 24h 从 jsDelivr 镜像拉取，ETag 版本比对 + 结构校验 + `.bak` 备份 + 原子写入 + 内存热重载
 
 ### 知识检索（本地优先，联网兜底）
@@ -43,7 +45,7 @@
 
 - **Web 管理面板**（`http://127.0.0.1:5210`）：运行状态、词典增删、用户记忆查看/删除、数据刷新、配置查看（密钥脱敏）
 - **SQLite 分析层**：消息实时入库，支持 `活跃榜 [N天]` / `群统计` / 抽卡记录
-- **插件架构**：core（装配/路由/平台服务/知识单例）+ plugins（5 指令 + 5 功能插件），208 项测试（`npm test`，纯本地零网络）
+- **插件架构**：core（装配/路由/平台服务/知识单例）+ plugins（6 指令 + 5 功能插件），229 项测试（`npm test`，纯本地零网络）
 - **风控降险内置**：backfill 节流、重连退避、贴表情冷却、出站过滤（见下）
 
 ## 指令一览
@@ -56,6 +58,7 @@
 | 干员/藏品 | `查干员 X`、`查藏品 X`、`干员生日 X`、`今日生日` |
 | 抽卡 | `卡池`、`单抽 [池]`、`十连 [池]`、`抽卡记录 [N]`、`谁最欧` |
 | 统计 | `活跃榜 [N天]`、`群统计` |
+| 平台状态 | `#status`、`/status`（返回 NapCat 账号/版本/协议/在线状态/WS/耗时） |
 | 数据 | `刷新数据` |
 
 其余内容走 AI 群聊（LLM 自主回复，可调用工具）。
@@ -85,7 +88,7 @@ cp config.example.json config.json   # 复制模板后按需修改
 - `report.userId`：日报私聊接收人（不填不发日报）
 - `groups`：监控群白名单，`[]` = 全部群
 
-常用开关：`llm.chatEnabled`（AI 群聊）、`quiet`（静默时段）、`tools.enabled`（工具调用）、`emojiLike.enabled`（贴表情）、`memory.enabled`（用户记忆）、`webSearch.apiKey`（联网搜索）、`webui.enabled`（管理面板）。完整键表见 [docs/config-reference.md](docs/config-reference.md)。
+常用开关：`llm.chatEnabled`（AI 群聊）、`quiet`（静默时段）、`tools.enabled`（工具调用）、`emojiLike.enabled`（贴表情）、`memory.enabled`（用户记忆）、`webSearch.apiKey`（联网搜索）、`owner.userId`（主人：文档/提示词编辑权限）、`webui.enabled`（管理面板）。完整键表见 [docs/config-reference.md](docs/config-reference.md)。
 
 ### 3. 本地干员数据库（可选，强烈推荐）
 
@@ -133,11 +136,12 @@ src/
                   usermem.js emoji.js filter.js logger.js http.js
     knowledge/    lingo.js arkdb.js cache.js wiki.js moegirl.js wikipedia.js websearch.js
   plugins/      功能插件（互不 import；服务经 createApp 注入）
-    memory.js lingo.js ark.js gacha.js stats.js   指令插件（带 750–400）
+    memory.js lingo.js ark.js gacha.js stats.js status.js   指令插件（带 750–350）
     summary.js refresh.js report.js              后台流程（总结/数据更新/日报）
     chat.js    AI 群聊 ChatBrain + 工具表 createChatTools + 兜底分发
     webui.js   Web 管理面板
 test/           node:test：baseline/（行为基线）+ smoke/（接线与全链冒烟）
+prompts/        人格提示词（chat-system.md，她可自我编辑、即改即生效；缺失回退代码内置默认）
 config.example.json / config.json   配置模板 / 实配（密钥，gitignored）
 logs/ data/                         日志（按天轮转）/ 运行数据（消息/状态/库/记忆）
 ```
@@ -146,9 +150,10 @@ logs/ data/                         日志（按天轮转）/ 运行数据（消
 
 QQ 对自动化账号有阶梯式风控（提示 → 限制 → 冻结 → 永久）。本项目内置降险措施：
 
-- **backfill 降险**：距上次在线不足 10 分钟（短暂重启）整体跳过；单群水位 <5 分钟跳过；单次拉取 100 条；群间错峰 800ms
-- **重连退避**：断线重连 3s 起指数退避、60s 封顶
-- **贴表情节流**：同群 60s 冷却（`emojiLike.cooldownSeconds`）
+- **backfill 降险**：距上次在线不足 5 分钟（短暂重启）整体跳过；单群水位 <2 分钟跳过；单次拉取 200 条；群间错峰 300ms
+- **重连退避**：断线重连 3s 起指数退避、30s 封顶
+- **贴表情节流**：同群 5s 冷却（`emojiLike.cooldownSeconds`）
+- **发表情节流**：同群 3s 发送间隔、排队发送不丢弃（`emojiLike.sendCooldownSeconds`）
 - **出站过滤**：AI 回复发送前敏感词兜底替换
 
 账号侧建议：

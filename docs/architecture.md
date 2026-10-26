@@ -52,12 +52,13 @@ src/            Node ESM；入口 src/index.js（引导 17 行：import { main }
       wikipedia.js  维基百科检索器（可选，默认关；需要代理）
       websearch.js  联网搜索检索器（可选：智谱/博查搜索 API；配置 key 后取代萌娘/维基做通用检索）
   plugins/       功能插件——互不 import；服务一律经 createApp 注入（构造注入 / dispatch ctx）
-    index.js      commandPlugins 装配清单（5 个指令插件集中交付 runtime 注册）
+    index.js      commandPlugins 装配清单（6 个指令插件集中交付 runtime 注册）
     memory.js     ◇ 用户记忆指令（记住/我的记忆/忘记我——带 750）
     lingo.js      ◇ 词典指令（学习/忘记/查词/词典——规则 1–4，带 700）
     ark.js        ◇ 干员/藏品/生日指令（查干员/查藏品/生日——规则 5–8，带 600）
     gacha.js      ◇ 抽卡指令（卡池/抽卡记录/单抽十连/欧气榜——规则 9–11，带 500）
     stats.js      ◇ 统计指令（活跃榜/群统计——规则 12–14，带 400）
+    status.js     ◇ 平台状态指令（#status / /status；查询 NapCat 三接口，带 350）
     summary.js    手动总结插件（带 900 = 原 S8；关键词认领 + per-group 互斥 + doSummary 编排）
     refresh.js    数据刷新插件（带 800 = 原 S11；指令认领 + hooks.start 自动定时器 + api.refresh 公共 runner）
     report.js     日报插件（仅 hooks：hooks.start 注册每日调度，时刻取 report.hour/minute，缺省 9:00）
@@ -68,6 +69,7 @@ test/           node:test（npm test）
   smoke/         import 面 / 注册表（含 PRIORITY keys 断言）/ 插件接线 / createApp 全链集成冒烟
 data/           （.gitignore 排除）运行数据：消息/状态/词典/缓存/干员库/SQLite
 logs/           日志
+prompts/          人格提示词（chat-system.md，她可自我编辑、mtime 热重载即改即生效；缺失回退内置默认）
 config.example.json / config.json   配置模板（脱敏）与实配（含密钥）
 ```
 
@@ -104,7 +106,7 @@ S# 编号保留为行为契约锚点（CLAUDE.md 红线与 refactor-proposal 保
 | S10 | 问题为空（纯 @ 无内容） | 真 @ 提问者回「艾特Mon3tr干什么呀喵」（无 user_id 的异常事件退化为文本 @昵称），return | ↓ |
 | S12 | **插件分发带** `registry.dispatch(ctx)`（text = 剥 @ 后的问题文本） | 见下方分发表；string → routing 层发送 | — |
 
-分发带（dispatch 内按 priority 降序逐插件调用，首个 string/true 即短路；ctx = {lingo, arkdb, memory, analytics, groupId, userId, userName, messageId, text}）：
+分发带（dispatch 内按 priority 降序逐插件调用，首个 string/true 即短路；ctx = {lingo, arkdb, memory, analytics, client, groupId, userId, userName, messageId, text}）：
 
 | 带 | 插件（文件） | 认领判定 | 命中行为 |
 |---|---|---|---|
@@ -115,9 +117,10 @@ S# 编号保留为行为契约锚点（CLAUDE.md 红线与 refactor-proposal 保
 | 600 | ark（plugins/ark.js） | 干员/藏品/生日规则（规则 5–8） | 同左 |
 | 500 | gacha（plugins/gacha.js） | 抽卡/记录/欧气榜规则（规则 9–11） | 同左 |
 | 400 | stats（plugins/stats.js） | 活跃榜/群统计规则（规则 12–14） | 同左 |
+| 350 | status（plugins/status.js） | 整串 `#status` / `/status`（大小写不敏感） | 返回 true；并发 `get_login_info`/`get_version_info`/`get_status` 后自驱真 @ 回平台信息 |
 | 300 | chat（plugins/chat.js）＝原 S13 | 恒到达（分发带末端） | 返回 true；自驱异步 `brain.chat(...)`（不 await；reply 非空才群发） |
 
-分发返回值处理（routing S12 段）：`string` → 路由层**真 @ 提问者**发送该文案（OneBot at 段；无 user_id 时退化为纯文本）并记指令日志；`true` → 插件自驱（总结/刷新/chat 均异步进行、本层不发送）。chat 插件恒 true 消费 → **dispatch 不再有落空路径**——原「严格 null 才落 chat」边界内化为带末端（行为不变：LLM 兜底仍最晚执行、仍不 await、brain 内失败回退 defaultReply 文案照发）。report/webui 插件 priority 0，不占任何带（handleMessage 恒 null，仅 hooks）。
+分发返回值处理（routing S12 段）：`string` → 路由层**真 @ 提问者**发送该文案（OneBot at 段；无 user_id 时退化为纯文本）并记指令日志；`true` → 插件自驱（总结/刷新/status/chat 均异步进行、本层不发送）。chat 插件恒 true 消费 → **dispatch 不再有落空路径**——原「严格 null 才落 chat」边界内化为带末端（行为不变：LLM 兜底仍最晚执行、仍不 await、brain 内失败回退 defaultReply 文案照发）。report/webui 插件 priority 0，不占任何带（handleMessage 恒 null，仅 hooks）。
 
 要点：
 
@@ -125,15 +128,15 @@ S# 编号保留为行为契约锚点（CLAUDE.md 红线与 refactor-proposal 保
 - **入库时机**：非 @ 消息、静默时段消息全部照常入库并计数，只是不回复。
 - **指令 > chat**：指令带（750–400）未命中才轮到 chat 带末端消费；chatEnabled=false 时 chat 整链短路（@ 消息无回复，行为同旧 S13）。
 - **静默时段优先级最高**：先于关键词与指令，后于入库。
-- **工具调用（function calling）**：`ChatBrain._llmChat` 在 LLM 请求中携带工具表（runtime 经 `createChatTools` 装配：`react_emoji` 贴表情、`query_operator/query_relic/query_gacha/query_group_stats` 只读查询、`query_user_memory/remember` 记忆读写）；模型返回 `tool_calls` → `_runTool` 本地执行并回填结果继续生成（最多 `tools.maxRounds` 轮，末轮不带工具强制收口；未知工具/坏参数/异常均以文本回填不打断回复）。贴表情完全由模型决定（emojiLike.enabled 控制 react 出口）；工具表由 config.tools.enabled 总开关。
+- **工具调用（function calling）**：`ChatBrain._llmChat` 在 LLM 请求中携带工具表（runtime 经 `createChatTools` 装配：`react_emoji` 贴表情、`send_face` 发表情消息、`query_operator/query_relic/query_gacha/query_group_stats` 只读查询、`query_user_memory/remember` 记忆读写、`set_nickname/set_signature/set_group_card` 自我资料修改（带冷却）、`read_text_file/write_text_file` 文档/提示词读写（仅 config.owner.userId；白名单 docs//prompts//README/CLAUDE.md，写前备份））；模型返回 `tool_calls` → `_runTool` 本地执行并回填结果继续生成（最多 `tools.maxRounds` 轮，末轮不带工具强制收口；未知工具/坏参数/异常均以文本回填不打断回复）。贴表情完全由模型决定（emojiLike.enabled 控制 react 出口）；工具表由 config.tools.enabled 总开关。
 - **关键词判定基准（2026-09 已决策，见 §8 坑 11）**：手动总结关键词在分发带内对**剥 @ 后的问题文本**判。常规「@机器人 总结」（带空格或 @ 段后另起文本）与旧 S8（对含 @ 完整文本判）等价；**紧贴 @ 无空格的整串**（如文本「@PRTS总结」、at 段缺 name 时「@10001总结」）整串被 extractQuestion 前导正则吞掉 → 落 S10 空 @ 提示、不触发总结——**既定语义**（旧 S8 会触发，属历史行为，不回退）。
 - **S10 空@ 回复在分发带之前**：纯 @ 消息不经过任何插件（含 summary）——见上条差异。
 - 刷新指令（refresh 插件）与总结关键词不冲突：前者整串锚定、后者子串包含，带序 900 > 800。
 
-## 5. 指令分发表（5 个命令插件，域内序 = 文件内代码序、域间序 = priority 带）
+## 5. 指令分发表（6 个命令插件，域内序 = 文件内代码序、域间序 = priority 带）
 
-规则按领域拆在 5 个插件文件（plugins/index.js 的 commandPlugins 数组交付 runtime 注册）；
-**17 条规则的内部顺序即优先级**：域内代码序 + 域间带 750（用户记忆）> 700（词典）> 600（干员）> 500（抽卡）> 400（统计），
+规则按领域拆在 6 个插件文件（plugins/index.js 的 commandPlugins 数组交付 runtime 注册）；
+**18 条规则的内部顺序即优先级**：域内代码序 + 域间带 750（用户记忆）> 700（词典）> 600（干员）> 500（抽卡）> 400（统计）> 350（平台状态），
 与旧 commands.js 线性分发表逐一对应（registry 测试断言 PRIORITY keys 锁定带序）。
 
 | 域（插件文件） | 规则（按代码顺序） | 说明 |
@@ -152,9 +155,10 @@ S# 编号保留为行为契约锚点（CLAUDE.md 红线与 refactor-proposal 保
 | 抽卡（gacha.js） | 整串 卡池 / 卡池列表 | 当前开放池 + UP 干员 |
 | 抽卡 | 抽卡记录/我的抽卡/抽卡统计 `[N]` | 最近 N 个 6★ 明细 + 累计统计（默认 10）；**必须先于"单抽/十连"规则**（顺序敏感，勿合并正则） |
 | 抽卡 | 整串 谁最欧/群欧皇/欧气榜 | SQLite 抽卡记录排行 |
-| 抽卡 | 单抽/十连/抽卡 `[池]` | 真实卡池出率；无开放池降级常驻模拟；逐抽记库 |
+| 抽卡 | 单抽/N连（十连、一百连…）/抽卡 `[池]` | 真实卡池出率；无开放池降级常驻模拟；逐抽记库；**>10 抽改合并转发**（每节点一整辆十连；超单卡字节预算拆多卡，上限 1000 连，单卡失败回退文本） |
 | 统计（stats.js） | 活跃榜/活跃统计/活跃度 `[N天]` | 依赖 SQLite |
 | 统计 | 整串 群统计/消息统计 | |
+| 平台状态（status.js） | 整串 `#status` / `/status`（大小写不敏感） | 并发查询登录/版本/状态三接口；回账号、NapCat 版本、OneBot 协议、在线状态、WS、接口计数、耗时与 Bot 运行时长 |
 
 跨领域无前缀冲突；领域内顺序敏感点集中在抽卡域（记录先于抽卡）。
 
@@ -162,11 +166,11 @@ S# 编号保留为行为契约锚点（CLAUDE.md 红线与 refactor-proposal 保
 
 ### 6.1 离线补偿 backfillHistory（core/routing.js createRouting 内，connect 生命周期内，仅一次）
 
-**每群独立起点** `sinceTs = max(该群 lastSeenTs, now − backfill.maxHours×3600)`（默认 72h 兜底；2026-09 修复坑 9：原为全局单值——单群拉取失败会把别群水位推高，该群缺口永远错过；现按群存储于 data/state/lastSeen.json 的 `{"byGroup"}`，群间互不钳制）；**风控降险（2026-09）**：距上次在线 < `backfill.minOfflineMinutes`（默认 10 分钟，上次在线时刻持久化于 data/state/runtime.json）时整体跳过补拉；水位较新（5 分钟内）的群跳过；单群 `count: 100`；群间错峰 `backfillStaggerMs`（默认 800ms，测试传 0）；群集合 = `config.groups` 非空用之，否则 `get_group_list`（失败回退磁盘已跟踪群）；每群 `get_group_msg_history(message_seq:0, count:100)` → 过滤 `time ≥ sinceTs` 与批内重复 → 逐条 `store.addHistoryMessage`（与内存/磁盘双去重）+ `analytics.record`；该群有新增才 `setLastSeenTs(gid, latest)`（每群只增不减）；单群失败记日志继续。
+**每群独立起点** `sinceTs = max(该群 lastSeenTs, now − backfill.maxHours×3600)`（默认 72h 兜底；2026-09 修复坑 9：原为全局单值——单群拉取失败会把别群水位推高，该群缺口永远错过；现按群存储于 data/state/lastSeen.json 的 `{"byGroup"}`，群间互不钳制）；**风控降险（2026-09；2026-10 放宽到适中档）**：距上次在线 < `backfill.minOfflineMinutes`（默认 5 分钟，上次在线时刻即 data/state/runtime.json 的 lastConnectedAt，由**在线心跳**每分钟节流更新，长跑实例重启不算长时间离线）时整体跳过补拉；水位较新（2 分钟内）的群跳过；单群 `count: 200`；群间错峰 `backfillStaggerMs`（默认 300ms，测试传 0）；群集合 = `config.groups` 非空用之，否则 `get_group_list`（失败回退磁盘已跟踪群）；每群 `get_group_msg_history(message_seq:0, count:200)` → 过滤 `time ≥ sinceTs` 与批内重复 → 逐条 `store.addHistoryMessage`（与内存/磁盘双去重）+ `analytics.record`；该群有新增才 `setLastSeenTs(gid, latest)`（每群只增不减）；单群失败记日志继续。
 
 ### 6.2 每日日报 dailyReport（report 插件，hooks.start 经 scheduler.start 注册每日回调，时刻取 `report.hour/minute`，缺省 9:00）
 
-调度器实例归 report 插件所有：hooks.start → `scheduler.start(dailyReport)`（core/platform/scheduler.js 自驱每日循环），hooks.stop → `scheduler.stop()`（旧实现由 runtime 信号路径直调）。编排口径：守卫 `ready` + 配置了 `report.userId`。**昨日本地自然日** `[昨日00:00, 今日00:00)`；每群 `store.loadFromDisk(gid, yesterdayStart, todayStart)` 载入该日期段再 `collectRange` + 敏感过滤；消息数 ≥ `report.minMessages`(100) 才算活跃群；逐群 `summarizer.summarize(...,'daily')`，单群失败继续；全部失败则不发送；成功则私聊发给 `report.userId`。**不写任何 lastSummaryAt/lastSeen 状态**。
+调度器实例归 report 插件所有：hooks.start → `scheduler.start(dailyReport)`（core/platform/scheduler.js 自驱每日循环），hooks.stop → `scheduler.stop()`（旧实现由 runtime 信号路径直调）。编排口径：守卫 `ready` + 配置了 `report.userId`。**昨日本地自然日** `[昨日00:00, 今日00:00)`；每群 `store.loadFromDisk(gid, yesterdayStart, todayStart)` 载入该日期段再 `collectRange` + 敏感过滤；消息数 ≥ `report.minMessages`(100) 才算活跃群；逐群 `summarizer.summarize(...,'daily')`，单群失败继续；全部失败则不发送；成功则以**合并转发**私聊发给 `report.userId`（标题节点 + 每群一个节点，2026-10 起；转发失败回退整条文本）。**不写任何 lastSummaryAt/lastSeen 状态**。
 
 ### 6.3 数据刷新（refresh 插件 api.refresh，3 个触发源共用同一 runner）
 
@@ -182,7 +186,7 @@ logger（core/platform/logger.js）← core 全部服务 + 全部插件（runtim
 wiki（knowledge 组纯函数 extractKeywords/isArknightsRelated）← moegirl、wikipedia、chat 插件
 store（platform 组 fmtFull/hhmm）← summarizer、summary 插件、routing（fmtFull）
 http（platform 组 fetchRetry，2026-09 加固）← summarizer、moegirl、chat 插件（_reply 的 LLM 调用）
-registry（core 顶层，PRIORITY 常量）← memory/lingo/ark/gacha/stats/chat/refresh/summary 插件（读带号）
+registry（core 顶层，PRIORITY 常量）← memory/lingo/ark/gacha/stats/status/chat/refresh/summary 插件（读带号）
 routing（core 顶层）← platform 组 logger/store（静态，fmtFull/log）+ 其余服务全经 createRouting
         options 注入（零插件工厂 import；S12 经注入的 registry 分发）
 runtime（core 顶层）← platform/knowledge/registry/routing 全部 + plugins 全部工厂（唯一装配者）
@@ -191,7 +195,7 @@ platform/ 与 knowledge/ 组间：knowledge → platform 仅两条——logger�
 filter.js 零 import；plugins 间零互 import（服务一律经 createApp 注入/ctx 注入）
 ```
 
-**实例化关系**：`createApp` new 出 MessageStore / NapCatClient / Summarizer / Scheduler / Analytics / DataRefresher 6 个平台服务 + UserMemory（config.memory.enabled=false 时为 null）+ LingoStore / ArkDB / KnowledgeCache / 三个 Wiki 检索器 / WebSearchRetriever 7 个知识单例，共 14 个实例；`ChatBrain`（注入 7 个知识单例 + UserMemory）、`createRouting`（注入判定所需服务与 state 共享状态对象）与 10 个插件描述符随后装配。**重构前最大耦合点「ChatBot 是 lingo/arkdb 等服务宿主、commands/webui 反向借用 chatBot.lingo」已拆**：知识服务现在是 runtime 装配的事实共享单例，brain（字段引用）与指令插件（dispatch ctx）与 webui（getLingo/getMemory）注入/借用的都是同一批实例（详见 refactor-proposal「服务上移」）。
+**实例化关系**：`createApp` new 出 MessageStore / NapCatClient / Summarizer / Scheduler / Analytics / DataRefresher 6 个平台服务 + UserMemory（config.memory.enabled=false 时为 null）+ LingoStore / ArkDB / KnowledgeCache / 三个 Wiki 检索器 / WebSearchRetriever 7 个知识单例，共 14 个实例；`ChatBrain`（注入 7 个知识单例 + UserMemory）、`createRouting`（注入判定所需服务与 state 共享状态对象）与 11 个插件描述符随后装配。**重构前最大耦合点「ChatBot 是 lingo/arkdb 等服务宿主、commands/webui 反向借用 chatBot.lingo」已拆**：知识服务现在是 runtime 装配的事实共享单例，brain（字段引用）与指令插件（dispatch ctx）与 webui（getLingo/getMemory）注入/借用的都是同一批实例（详见 refactor-proposal「服务上移」）。
 
 ## 8. 已知怪癖与坑（改代码前必读）
 

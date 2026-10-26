@@ -28,6 +28,7 @@
     "arkdbDir": "./data/ark",
     "chatConcurrency": 3,
     "retrievalGate": true,
+    "thinking": "auto",
     "wikipediaEnabled": false,
     "wikipediaApiUrl": "https://zh.wikipedia.org/w/api.php",
     "wikipediaMaxCharPerPage": 2000,
@@ -42,6 +43,9 @@
     "hour": 9,
     "minute": 0
   },
+  "owner": {
+    "userId": 0
+  },
   "quiet": {
     "enabled": true,
     "start": 0,
@@ -49,7 +53,8 @@
   },
   "emojiLike": {
     "enabled": true,
-    "cooldownSeconds": 60
+    "cooldownSeconds": 5,
+    "sendCooldownSeconds": 3
   },
   "tools": {
     "enabled": true,
@@ -63,7 +68,7 @@
   },
   "backfill": {
     "maxHours": 72,
-    "minOfflineMinutes": 10
+    "minOfflineMinutes": 5
   },
   "dataRefresh": {
     "enabled": true,
@@ -88,6 +93,10 @@
     "enabled": true
   },
   "commands": {
-    "manualSummary": ["总结", "/总结", "#总结"]
+    "manualSummary": [
+      "总结",
+      "/总结",
+      "#总结"
+    ]
   }
 }
