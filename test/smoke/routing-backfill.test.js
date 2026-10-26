@@ -157,7 +157,7 @@ describe('routing：S1 connect → selfId 回填 + backfill 单次执行', () =>
     assert.deepEqual(calls.lastSeenSet, [[1, now], [2, now]]);
   });
 
-  it('backfill 风控降险：水位较新（5 分钟内）的群跳过补拉，只拉有缺口的群', async () => {
+  it('backfill 风控降险：水位较新（2 分钟内）的群跳过补拉，只拉有缺口的群', async () => {
     const now = Math.floor(Date.now() / 1000);
     const { routing, calls } = mkRouting({
       tracked: [1, 2],
@@ -170,7 +170,7 @@ describe('routing：S1 connect → selfId 回填 + backfill 单次执行', () =>
     assert.deepEqual(calls.added.map(([gid]) => gid), [2]);
   });
 
-  it('backfill 风控降险：距上次在线 < 10 分钟（短暂重启）整体跳过补拉', async () => {
+  it('backfill 风控降险：距上次在线 < 5 分钟（短暂重启）整体跳过补拉', async () => {
     const now = Math.floor(Date.now() / 1000);
     const { routing, calls } = mkRouting({
       tracked: [7],
