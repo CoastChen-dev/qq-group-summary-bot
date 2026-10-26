@@ -378,3 +378,34 @@ describe('MessageStore 内存收集（collectSince / collectRange）', () => {
     assert.deepEqual(store.collectRange(GID, ts(9), ts(12)).map((r) => r.id), ['e1', 'e2', 'e3']);
   });
 });
+
+describe('MessageStore 内存保留窗口（2026-10：常驻内存只涨不减）', () => {
+  it('超窗消息清出内存，磁盘与幂等闸保留；重读能取回、重复落库仍被挡', (t) => {
+    const dir = makeTmp();
+    const nowSec = Math.floor(Date.now() / 1000);
+    const store = new MessageStore(dir, { retentionHours: 1 });
+    // 先落一条 2 小时前的（当时它是最新锚点，不会立刻被清）
+    store.addMessage(makeEvent({ message_id: 'old', time: nowSec - 7200 }));
+    assert.equal(store.groups.get(GID).messages.has('old'), true);
+    // 再来一条现在的：锚点推进到 now，old 超出 1h 窗口 → 清出内存
+    store.addMessage(makeEvent({ message_id: 'new', time: nowSec }));
+    assert.equal(store.groups.get(GID).messages.has('old'), false);
+    assert.equal(store.groups.get(GID).messages.has('new'), true);
+    // 内存里只剩新的；磁盘 JSONL 里两条都在
+    assert.deepEqual(store.collectRange(GID, 0, 2e9).map((r) => r.id), ['new']);
+    // 按需重读（日报/概括的用法）能把旧消息取回内存
+    store.loadFromDisk(GID);
+    assert.deepEqual(store.collectRange(GID, 0, 2e9).map((r) => r.id), ['old', 'new']);
+    // writtenIds 不受清理影响：同 id 再落一次仍返回 null（不会写重复行）
+    assert.equal(store.addHistoryMessage(GID, { message_id: 'old', time: nowSec - 7200, message: '旧' }), null);
+  });
+
+  it('retentionHours=0 关闭清理：消息不随锚点推进被清出', (t) => {
+    const dir = makeTmp();
+    const nowSec = Math.floor(Date.now() / 1000);
+    const store = new MessageStore(dir, { retentionHours: 0 });
+    store.addMessage(makeEvent({ message_id: 'old', time: nowSec - 7200 }));
+    store.addMessage(makeEvent({ message_id: 'new', time: nowSec }));
+    assert.deepEqual(store.collectRange(GID, 0, 2e9).map((r) => r.id), ['old', 'new']);
+  });
+});

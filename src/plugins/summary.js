@@ -53,6 +53,9 @@ export function createSummaryPlugin(deps) {
     let since = store.getLastSummaryAt(groupId);
     if (!since) since = nowSec - 60 * 60;
 
+    // 先补齐窗口：内存只保留最近 retentionHours（默认 72h），概括窗口跨重启或长于保留窗口时
+    // 只查内存会漏消息；loadFromDisk 按 id 幂等，重复读同一段不会再落盘
+    store.loadFromDisk?.(groupId, since);
     const recs = store.collectSince(groupId, since);
     if (recs.length === 0) {
       log(`[group ${groupId}] 该时段无消息，跳过概括`);

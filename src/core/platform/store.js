@@ -102,17 +102,25 @@ export class MessageStore {
   /**
    * 建好 messages/ 与 state/ 子目录（recursive，已存在不报错）并恢复各群 lastSeen 水位。
    * @param {string} dataDir - 数据根目录（config.dataDir）
+   * @param {{retentionHours?: number}} [opts={}] - retentionHours：每群内存只保留最近 N 小时
+   *   的消息（默认 72；0 = 不限）。更早的从内存清掉，需要时由 loadFromDisk 从 JSONL 重读；
+   *   磁盘文件与 writtenIds 不受影响（2026-10：常驻内存只涨不减的问题）
    */
-  constructor(dataDir) {
+  constructor(dataDir, { retentionHours = 72 } = {}) {
     this.dataDir = dataDir;
     this.msgsDir = path.join(dataDir, 'messages');
     this.stateDir = path.join(dataDir, 'state');
     fs.mkdirSync(this.msgsDir, { recursive: true });
     fs.mkdirSync(this.stateDir, { recursive: true });
+    // 内存保留窗口（小时）与每群上次清理时的 newestTime（清理是 O(n) 全表扫 → 组内最新
+    // 消息时间每前进 10 分钟才扫一次，不用墙钟，测试/补历史时段落也确定）
+    this.retentionHours = retentionHours;
+    this._lastPruneNewest = new Map();
     // 已知群集合：出现过/加载过的群都会登记；backfill 补偿与日报遍历无配置时靠它枚举群
     this.groupIds = new Set();
-    // 每群内存态：messages 按消息 id 索引（该群消息全量常驻内存）；
-    // users 群成员名片缓存（userId → {name, card}）；lastSummaryAt 最后概括时间（秒，0 = 从未概括）
+    // 每群内存态：messages 按消息 id 索引（只保留最近 retentionHours 小时，见 _pruneMessages）；
+    // users 群成员名片缓存（userId → {name, card}）；lastSummaryAt 最后概括时间（秒，0 = 从未概括）；
+    // newestTime 该群内存里最新一条的 time（清理窗口的锚点）
     this.groups = new Map();
     // 已写盘闸 "群号:消息id"：防同一条消息重复追加 JSONL。只增不减——一旦写入终身有效；
     // 重启后由 loadFromDisk 扫盘逐行重建，保证跨进程幂等
@@ -255,9 +263,37 @@ export class MessageStore {
   // 取群内存态（惰性建默认结构）——各公开方法的统一入口
   _group(groupId) {
     if (!this.groups.has(groupId)) {
-      this.groups.set(groupId, { messages: new Map(), users: new Map(), lastSummaryAt: 0 });
+      this.groups.set(groupId, { messages: new Map(), users: new Map(), lastSummaryAt: 0, newestTime: 0 });
     }
     return this.groups.get(groupId);
+  }
+
+  /**
+   * 内存保留窗口清理（2026-10）：把该群 messages 里早于 newestTime − retentionHours 的记录
+   * 从内存删掉，磁盘 JSONL 与 writtenIds 不动（需要时 loadFromDisk 可原样读回；重复落库仍被
+   * writtenIds 挡住）。锚点用组内最新消息时间而非墙钟——测试/补历史时不会误删；组内最新
+   * 时间每前进 10 分钟才扫一次，避免每条消息都全表扫。
+   * @param {string|number} groupId - 群号
+   * @param {Object} g - 该群内存态
+   * @returns {number} 本次清出的条数
+   */
+  _pruneMessages(groupId, g) {
+    if (!this.retentionHours || this.retentionHours <= 0 || !g.newestTime) return 0;
+    const key = String(groupId);
+    if (g.newestTime - (this._lastPruneNewest.get(key) ?? 0) < 600) return 0;
+    this._lastPruneNewest.set(key, g.newestTime);
+    const cutoff = g.newestTime - this.retentionHours * 3600;
+    let removed = 0;
+    for (const [id, rec] of g.messages) {
+      if ((rec.time ?? 0) < cutoff) {
+        g.messages.delete(id);
+        removed++;
+      }
+    }
+    if (removed > 0) {
+      log(`[store] 群 ${groupId} 内存清理 ${removed} 条（早于 ${fmtFull(new Date(cutoff * 1000))}，磁盘保留）`);
+    }
+    return removed;
   }
 
   // JSONL 路径模板：data/messages/<群号>/<YYYY-MM-DD>.jsonl（按天分片，追加写）
@@ -308,6 +344,7 @@ export class MessageStore {
               seen.add(rec.id);
               uniqueLines.push(line);
               g.messages.set(rec.id, rec);
+              if ((rec.time ?? 0) > g.newestTime) g.newestTime = rec.time;
               this.writtenIds.add(`${groupId}:${rec.id}`);
               this._learnUser(g, rec);
               loaded++;
@@ -417,12 +454,14 @@ export class MessageStore {
   _commit(groupId, g, rec, { touchLastSeen = false } = {}) {
     if (this.writtenIds.has(`${groupId}:${rec.id}`)) return null;
     g.messages.set(rec.id, rec);
+    if ((rec.time ?? 0) > g.newestTime) g.newestTime = rec.time;
     this.writtenIds.add(`${groupId}:${rec.id}`);
     this._learnUser(g, rec);
     if (touchLastSeen) this.setLastSeenTs(groupId, rec.time);
     const file = this._fileFor(groupId, localDate(rec.time * 1000));
     fs.mkdirSync(path.dirname(file), { recursive: true });
     fs.appendFileSync(file, JSON.stringify(rec) + '\n');
+    this._pruneMessages(groupId, g);
     return rec;
   }
 
