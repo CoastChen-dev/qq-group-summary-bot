@@ -16,7 +16,7 @@ const tick = (ms) => new Promise((r) => setTimeout(r, ms));
 
 /** 假 bridge：可配置 submit 行为与任务终态 */
 function mkBridge({ jobState = 'done', submitError = null, status = {}, screenshot = null } = {}) {
-  const calls = { submit: [], job: 0, stop: 0, screenshot: 0, connect: 0 };
+  const calls = { submit: [], job: 0, stop: 0, screenshot: 0, connect: 0, timeout: null };
   return {
     calls,
     baseUrl: 'http://stub',
@@ -25,9 +25,10 @@ function mkBridge({ jobState = 'done', submitError = null, status = {}, screensh
     async status() {
       return { ok: true, version: 'v6.20.1', connected: true, running: false, job: null, last_error: '', ...status };
     },
-    async submitMany(tasks) {
+    async submitMany(tasks, timeoutMinutes) {
       if (submitError) throw submitError;
       calls.submit.push(tasks);
+      calls.timeout = timeoutMinutes;
       return { job_id: 'j1' };
     },
     async submit(type, params) {
@@ -244,6 +245,38 @@ describe('MAA 指令插件：指令解析与回执', () => {
     await tick(10);
     assert.match(q.plugin.handleMessage(ctx('maa 确认')), /已过期/);
     assert.equal(q.bridge.calls.submit.length, 0);
+  });
+
+  it('肉鸽：主题别名 → Roguelike 参数，长任务放宽超时；未知主题/缺主题给用法', async () => {
+    const { plugin, bridge } = mkPlugin();
+    plugin.handleMessage(ctx('maa 肉鸽 萨米 0 3'));
+    await tick(30);
+    assert.deepEqual(bridge.calls.submit[0], [{ type: 'Roguelike', params: { theme: 'Sami', mode: 0, starts_count: 3 } }]);
+    assert.equal(bridge.calls.timeout, 240);
+
+    assert.match(plugin.handleMessage(ctx('maa 肉鸽 未知主题')), /未知主题/);
+    assert.match(plugin.handleMessage(ctx('maa 肉鸽')), /用法/);
+
+    // 默认 mode 0（mode 2 已被 MAA 移除，传了会被 Core 拒绝）
+    const b3 = mkBridge();
+    const p3 = createMaaPlugin({ bridge: b3, client: mkClient(), ownerId: 10001, pollIntervalMs: 5 });
+    p3.handleMessage(ctx('maa 肉鸽 萨米'));
+    await tick(20);
+    assert.deepEqual(b3.calls.submit[0][0].params, { theme: 'Sami', mode: 0, starts_count: 1 });
+  });
+
+  it('生息：Tales 模式与重启锚点映射', async () => {
+    const { plugin, bridge } = mkPlugin();
+    plugin.handleMessage(ctx('maa 生息'));
+    await tick(30);
+    assert.deepEqual(bridge.calls.submit[0][0], { type: 'Reclamation', params: { theme: 'Tales', mode: 0 } });
+    assert.equal(bridge.calls.timeout, 240);
+
+    const b2 = mkBridge();
+    const p2 = createMaaPlugin({ bridge: b2, client: mkClient(), ownerId: 10001, pollIntervalMs: 5 });
+    p2.handleMessage(ctx('maa 生息 RA15'));
+    await tick(30);
+    assert.deepEqual(b2.calls.submit[0][0].params, { theme: 'RelaunchAnchor', mode: 32 });
   });
 
   it('停止：调用 bridge.stop 并回执', async () => {

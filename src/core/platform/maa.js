@@ -172,10 +172,13 @@ export class MaaBridge {
   /**
    * 提交任务链（MAA 顺序执行，全部完成才触发 AllTasksCompleted）。
    * @param {Array<{type: string, params?: Object}>} tasks - 任务数组（如日常一条龙）
+   * @param {number} [timeoutMinutes] - 本任务的超时（覆盖 worker 默认；肉鸽/生息这类长任务用）
    * @returns {Promise<{job_id: string}>} 任务句柄
    */
-  submitMany(tasks) {
-    return this._req('POST', '/task', { tasks });
+  submitMany(tasks, timeoutMinutes) {
+    const body = { tasks };
+    if (timeoutMinutes) body.timeout_minutes = timeoutMinutes;
+    return this._req('POST', '/task', body);
   }
 
   /** 查询任务 {state, elapsed, drops, chains, error, events} */

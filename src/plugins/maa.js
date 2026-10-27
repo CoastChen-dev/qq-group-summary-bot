@@ -34,6 +34,8 @@ const HELP = [
   'maa 截图 —— 把当前模拟器画面发到群里',
   'maa 抽卡十连 / maa 抽卡单抽 —— 真抽卡（需 allowGacha；会先要二次确认）',
   'maa 确认 / maa 取消 —— 确认或放弃待执行的抽卡',
+  'maa 肉鸽 <主题> [模式] [次数] —— 主题：傀影/水月/萨米/萨卡兹/界园/黑洞（默认模式 0 刷分）',
+  'maa 生息 [0|1|RA1|RA15|RA4] —— 生息演算：0/1=沙洲遗闻刷点，RA*=重启锚点',
   'maa 自定义 <任务链…> —— 执行 MAA 任务链（如 maa 自定义 Award）',
   'maa 重连 —— 重新连接模拟器',
   'maa 关闭 —— 关闭游戏',
@@ -47,6 +49,16 @@ const MALL_DEFAULT_BUY = ['招聘许可', '龙门币'];
 const GACHA = {
   十连: { chain: 'GachaTenTimes', cost: '6000 合成玉 / 10 张寻访凭证（以游戏内为准）' },
   单抽: { chain: 'GachaOnce', cost: '600 合成玉 / 1 张寻访凭证（以游戏内为准）' },
+};
+
+// 肉鸽主题：中文别名 → MAA theme 枚举（本地 resource/tasks/Roguelike 下同名文件）
+const RL_THEMES = {
+  傀影: 'Phantom', phantom: 'Phantom',
+  水月: 'Mizuki', mizuki: 'Mizuki',
+  萨米: 'Sami', sami: 'Sami',
+  萨卡兹: 'Sarkaz', sarkaz: 'Sarkaz',
+  界园: 'JieGarden', jiegarden: 'JieGarden',
+  黑洞: 'BlackFlow', 黑流: 'BlackFlow', blackflow: 'BlackFlow',
 };
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -98,10 +110,10 @@ export function createMaaPlugin({
   }
 
   /** 轮询任务直到结束，然后把结果发回群；临时请求失败容忍 5 次 */
-  async function watchJob(jobId, ctx, label) {
+  async function watchJob(jobId, ctx, label, timeoutMs = taskTimeoutMs) {
     const started = Date.now();
     let fails = 0;
-    while (Date.now() - started < taskTimeoutMs) {
+    while (Date.now() - started < timeoutMs) {
       await sleep(pollIntervalMs);
       let job;
       try {
@@ -136,11 +148,12 @@ export function createMaaPlugin({
     watching = null;
   }
 
-  /** 提交任务链：回执 + 后台轮询（单任务走这里也一致） */
-  function submitMany(ctx, tasks, label) {
-    bridge.submitMany(tasks).then((r) => {
+  /** 提交任务链：回执 + 后台轮询（单任务走这里也一致）；opts.timeoutMinutes 会同时放宽 worker 与轮询上限 */
+  function submitMany(ctx, tasks, label, opts = {}) {
+    bridge.submitMany(tasks, opts.timeoutMinutes).then((r) => {
       send(ctx, `【MAA】${label} 已开始，完成后回报`, true);
-      watching = watchJob(r.job_id, ctx, label);
+      const watchMs = opts.timeoutMinutes ? (opts.timeoutMinutes + 5) * 60000 : taskTimeoutMs;
+      watching = watchJob(r.job_id, ctx, label, watchMs);
     }).catch((e) => {
       const msg = e && e.status === 409 ? '已有任务在跑，先「maa 停止」' : (e.message || '启动失败');
       send(ctx, `【MAA】${label} 未启动：${msg}`, true);
@@ -149,8 +162,8 @@ export function createMaaPlugin({
   }
 
   /** 提交单个任务 */
-  function submit(ctx, type, params, label) {
-    return submitMany(ctx, [{ type, params }], label);
+  function submit(ctx, type, params, label, opts = {}) {
+    return submitMany(ctx, [{ type, params }], label, opts);
   }
 
   /** 解析并执行一条 maa 指令；返回 true/string/null */
@@ -256,6 +269,42 @@ export function createMaaPlugin({
     }
     if (/^(取消|cancel)$/i.test(head)) {
       return pendingGacha.delete(String(ctx.groupId)) ? '已取消待确认的抽卡' : '没有待确认的抽卡';
+    }
+    if (/^(肉鸽|roguelike)$/i.test(head)) {
+      const rawTheme = rest[0];
+      if (!rawTheme) {
+        return '用法：maa 肉鸽 <主题> [模式] [次数]\n主题：傀影 / 水月 / 萨米 / 萨卡兹 / 界园 / 黑洞\n'
+          + '模式：0=刷分（默认），1=刷源石锭，4=凹开局，5=刷坍缩（仅萨米），6/7=月度/深入，'
+          + '10001=萨卡兹速通，20001=界园刷常乐，30001/30003=黑流\n例：maa 肉鸽 萨米 0 1';
+      }
+      const theme = RL_THEMES[rawTheme] || RL_THEMES[rawTheme.toLowerCase()];
+      if (!theme) return `未知主题「${rawTheme}」，可选：傀影 / 水月 / 萨米 / 萨卡兹 / 界园 / 黑洞`;
+      // mode 2 已在 MAA 中移除、3 未开放，传入会被 Core 拒绝（append_task 返回 0）；默认 0 刷分
+      const mode = rest[1] !== undefined ? (parseInt(rest[1], 10) || 0) : 0;
+      const times = Math.min(Math.max(parseInt(rest[2] || '1', 10) || 1, 1), 999);
+      return submit(ctx, 'Roguelike', { theme, mode, starts_count: times },
+        `肉鸽 ${rawTheme}（模式 ${mode} ×${times}）`, { timeoutMinutes: 240 });
+    }
+    if (/^(生息|生息演算|reclamation)$/i.test(head)) {
+      const arg = String(rest[0] || '').toUpperCase().replace(/\s/g, '');
+      let params;
+      let label;
+      if (!arg || arg === '0' || arg === '1') {
+        params = { theme: 'Tales', mode: arg === '1' ? 1 : 0 };
+        label = `生息演算·沙洲遗闻（模式 ${params.mode}）`;
+      } else if (/^RA-?1$/.test(arg)) {
+        params = { theme: 'RelaunchAnchor', mode: 16 };
+        label = '生息演算·重启锚点 RA-1';
+      } else if (/^RA-?15$/.test(arg)) {
+        params = { theme: 'RelaunchAnchor', mode: 32 };
+        label = '生息演算·重启锚点 RA-15';
+      } else if (/^RA-?4$/.test(arg)) {
+        params = { theme: 'RelaunchAnchor', mode: 48 };
+        label = '生息演算·重启锚点 RA-4';
+      } else {
+        return '用法：maa 生息 [0|1|RA1|RA15|RA4]\n0=沙洲遗闻无存档刷点（默认），1=有存档造物，RA*=重启锚点';
+      }
+      return submit(ctx, 'Reclamation', params, label, { timeoutMinutes: 240 });
     }
     if (/^(基建|infrast)$/i.test(head)) {
       return submit(ctx, 'Infrast', {

@@ -147,12 +147,14 @@ def main():
 
     def check_timeout():
         job = state['job']
-        if job and job['state'] == 'running' and time.time() - job['started'] > state['timeout']:
-            try:
-                asst.stop()
-            except Exception:
-                pass
-            finish(job, 'error', f'超过 {args.timeout_min} 分钟，已停止')
+        if job and job['state'] == 'running':
+            limit = job.get('timeout') or state['timeout']
+            if time.time() - job['started'] > limit:
+                try:
+                    asst.stop()
+                except Exception:
+                    pass
+                finish(job, 'error', f'超过 {round(limit / 60)} 分钟，已停止')
 
     class Handler(BaseHTTPRequestHandler):
         server_version = 'MaaBridge/1.0'
@@ -250,10 +252,17 @@ def main():
                         return self._send(409, {'ok': False, 'error': 'busy'})
                 if not connect():
                     return self._send(502, {'ok': False, 'error': state['last_error'] or 'connect failed'})
+                # 单任务可覆盖超时（肉鸽/生息这类长任务）：body.timeout_minutes
+                job_timeout = None
+                try:
+                    if body.get('timeout_minutes'):
+                        job_timeout = max(1, int(body['timeout_minutes'])) * 60
+                except (TypeError, ValueError):
+                    job_timeout = None
                 job = {
                     'id': uuid.uuid4().hex[:12], 'type': tasks[0]['type'], 'tasks': tasks,
                     'started': time.time(), 'state': 'running', 'drops': {}, 'chains': [],
-                    'events': [], 'error': '',
+                    'events': [], 'error': '', 'timeout': job_timeout,
                 }
                 with STATE_LOCK:
                     state['job'] = job
