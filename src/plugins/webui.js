@@ -54,13 +54,23 @@ export class WebUI {
    * 副作用：监听端口；处理器抛错内联兜成 500 JSON 响应
    */
   start(ctx) {
+    // 安全闸（2026-10）：非本机地址又没配 token 时拒绝启动——面板能删记忆/触发刷新/看脱敏配置，
+    // 裸奔到 0.0.0.0 等于把管理接口交给整个局域网
+    if (!this.token && !this._isLoopbackHost(this.host)) {
+      throw new Error(`webui: host=${this.host} 非本机地址但未配置 token，拒绝启动（请配 webui.token 或改回 127.0.0.1）`);
+    }
     this.ctx = ctx;
     this.server = http.createServer((req, res) => this._handle(req, res).catch((e) => {
       try { res.writeHead(500, { 'Content-Type': 'application/json; charset=utf-8' }); res.end(JSON.stringify({ error: String(e.message || e) })); } catch { /* 忽略 */ }
     }));
     this.server.listen(this.port, this.host, () => {
-      log(`[webui] 管理面板已启动: http://${this.host}:${this.port}${this.token ? ' （需 token）' : ''}`);
+      log(`[webui] 管理面板已启动: http://${this.host}:${this.port}${this.token ? ' （需 token）' : '（未配 token，仅本机可访问）'}`);
     });
+  }
+
+  // 是否本机回环地址（未配 token 时只允许绑这些地址）
+  _isLoopbackHost(host) {
+    return host === '127.0.0.1' || host === 'localhost' || host === '::1' || String(host).startsWith('127.');
   }
 
   /**
@@ -84,11 +94,28 @@ export class WebUI {
   }
 
   // 读请求体 JSON（>1MB 直接销毁连接防内存放大）；解析失败按空对象 {}
+  // 2026-10：超限/客户端中断/读错误都必须结算，否则 Promise 永不 resolve（每请求泄漏一份闭包）
   async _body(req) {
     return new Promise((resolve) => {
       let data = '';
-      req.on('data', (c) => { data += c; if (data.length > 1e6) req.destroy(); });
-      req.on('end', () => { try { resolve(JSON.parse(data || '{}')); } catch { resolve({}); } });
+      let settled = false;
+      const finish = (value) => {
+        if (settled) return;
+        settled = true;
+        resolve(value);
+      };
+      req.on('data', (c) => {
+        data += c;
+        if (data.length > 1e6) {
+          finish({});
+          req.destroy();
+        }
+      });
+      req.on('end', () => {
+        try { finish(JSON.parse(data || '{}')); } catch { finish({}); }
+      });
+      req.on('close', () => finish({}));
+      req.on('error', () => finish({}));
     });
   }
 
