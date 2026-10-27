@@ -14,6 +14,40 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { log } from './logger.js';
 
+// 记忆只存「资料」，不存「指令」：命中以下模式的内容一律拒收（2026-10 提示注入加固）。
+// 误杀风险：只收对助手下命令的句式（忽略规则/system prompt/你必须只回复…），普通偏好不受影响
+const INSTRUCTION_PATTERNS = [
+  /(?:忽略|无视|忘记|绕过)[^\n。！？]{0,8}(?:之前|以上|上面|先前|以前|规则|设定|指令|提示)/,
+  /(?:system\s*prompt|系统提示词?|开发者模式|developer\s*mode)/i,
+  /(?:ignore|disregard)[^\n.]{0,16}(?:previous|above|prior|instruction)/i,
+  /(?:从现在起|从现在开始|从今天起)[^\n。！？]{0,12}(?:你|助手|机器人|bot)/i,
+  /(?:你|助手|机器人|bot)[^\n。！？]{0,10}(?:必须|只能|一律|禁止|不许|不要|别再)[^\n。！？]{0,10}(?:回复|回答|执行|发送|输出|说话|称呼|叫|扮演)/i,
+];
+
+/**
+ * 判断一段文本是否像「对助手的指令」而不是关于某人的资料。
+ * @param {string} text - 待判定文本
+ * @returns {boolean} true = 像指令（记忆应拒收）
+ */
+export function looksLikeInstruction(text) {
+  const s = String(text ?? '');
+  return INSTRUCTION_PATTERNS.some((re) => re.test(s));
+}
+
+/**
+ * 记忆文本清洗：压成单行（换行/控制字符 → 空格）、去掉【…】伪块标记、合并连续空白。
+ * 目的是让记忆永远无法在 prompt 里伪造出一个新段落（如「【用户记忆】…」）。
+ * @param {string} text - 原始文本
+ * @returns {string} 单行清洗结果（可能为空串）
+ */
+export function sanitizeFact(text) {
+  return String(text ?? '')
+    .replace(/[\u0000-\u001f\u007f]/g, ' ')
+    .replace(/【[^】]{0,12}】/g, ' ')
+    .replace(/[ \t\u3000]+/g, ' ')
+    .trim();
+}
+
 /**
  * 用户记忆库：按「群 → 用户 → 事实列表」组织，写操作全量落盘（与 LingoStore 同惯例）。
  */
@@ -95,17 +129,20 @@ export class UserMemory {
 
   /**
    * 添加一条事实（同文重复 → 只刷新时间并标记 dup；超限触发容量淘汰）。
+   * 写入前清洗（单行、去【】伪块标记）并拒收指令式内容——记忆只存资料，防提示注入。
    * @param {string|number} groupId - 群号（按群隔离的键）
    * @param {string|number} userId - 用户 QQ
    * @param {string} name - 用户昵称（更新最近称呼）
-   * @param {string} text - 事实文本（trim 后 <2 字拒收；存储截断 60 字）
+   * @param {string} text - 事实文本（清洗后 <2 字或像指令则拒收；存储截断 60 字）
    * @param {'manual'|'auto'} [src='manual'] - 来源
-   * @returns {{ok: boolean, dup?: boolean, reason?: string}} 结果
+   * @returns {{ok: boolean, dup?: boolean, reason?: string}} 结果；拒收时 reason 说明原因
    * 副作用：内存更新 + 落盘
    */
   setFact(groupId, userId, name, text, src = 'manual') {
-    const t = String(text || '').trim();
-    if (t.length < 2) return { ok: false, reason: '内容太短' };
+    const clean = sanitizeFact(text);
+    if (clean.length < 2) return { ok: false, reason: '内容太短' };
+    if (looksLikeInstruction(clean)) return { ok: false, reason: '看起来像对助手的指令，记忆只存资料' };
+    const t = clean.slice(0, 60);
     const u = this._user(groupId, userId, true);
     if (name) u.name = String(name);
     const now = Math.floor(Date.now() / 1000);
