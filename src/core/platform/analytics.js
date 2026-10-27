@@ -180,6 +180,15 @@ export class Analytics {
   }
 
   /**
+   * 关闭 SQLite 句柄（退出/停服路径调用；重复关闭或已损坏时静默忽略）。
+   * 与构造失败路径里的 close 同语义：不关会让 Windows 上留下文件句柄。
+   * @returns {void}
+   */
+  close() {
+    try { this.db.close(); } catch { /* 已关闭/不可关闭，忽略 */ }
+  }
+
+  /**
    * 「最近 N 天活跃榜」文案（群内指令输出，可直接发；指令插件调用）。
    * 窗口 = now - days×86400 秒；按 user_id 分组计数，排除空名与 '未知'，取前 10。
    * @param {number} [days=7] - 统计窗口天数

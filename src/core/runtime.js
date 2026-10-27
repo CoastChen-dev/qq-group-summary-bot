@@ -29,6 +29,7 @@ import { Scheduler } from './platform/scheduler.js';
 import { filterMessages as filterMessagesRaw } from './platform/filter.js';
 import { Analytics } from './platform/analytics.js';
 import { DataRefresher } from './platform/refresher.js';
+import { installProcessGuards } from './platform/lifecycle.js';
 import { UserMemory } from './platform/usermem.js';
 import { LingoStore } from './knowledge/lingo.js';
 import { ArkDB } from './knowledge/arkdb.js';
@@ -252,16 +253,6 @@ export function createApp(config, overrides = {}) {
    * @returns {void}
    */
   function start() {
-    // 生命周期收尾（注册先于一切启动副作用）：registry.stopAll 逆序停插件（webui 先关面板、
-    // report 停每日调度器、refresh 清自动更新定时器），再关 WS，随后退出进程
-    for (const sig of ['SIGINT', 'SIGTERM']) {
-      process.on(sig, () => {
-        log('收到退出信号，正在关闭...');
-        stop();
-        process.exit(0);
-      });
-    }
-
     // 后台插件启动（§3 步骤 3+6）：refresh hooks.start 注册数据自动更新定时器（先于 connect，
     // 与旧顺序相同；仅 dataRefresh.enabled !== false 时启用）→ report hooks.start 排下一个
     // 9:00 → webui hooks.start 按 webui.enabled !== false 起面板
@@ -315,5 +306,26 @@ export function main() {
 
   const app = createApp(config);
   app.start();
+
+  // 进程级兜底（2026-10）：未处理拒绝/未捕获异常只记日志；退出信号 → 停服 + 关 DB + 限时 exit。
+  // 放在 main 而非 createApp：import/测试路径零副作用，信号与 exit 只属于真实进程入口。
+  let stopping = false;
+  installProcessGuards({
+    logError: (msg, detail) => err(msg, detail),
+    onSignal: (sig) => {
+      if (stopping) return;
+      stopping = true;
+      log(`收到 ${sig}，正在关闭...`);
+      try {
+        app.stop();
+        app.services.analytics.close?.();
+      } catch (e) {
+        err('关闭失败:', e.message);
+      }
+      // 给在途写盘/发送一点时间，再强制退出（残留定时器不得让进程挂住）
+      setTimeout(() => process.exit(0), 200).unref();
+    },
+  });
+
   return app;
 }
