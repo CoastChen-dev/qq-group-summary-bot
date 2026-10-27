@@ -69,6 +69,8 @@
 | `llm.chatEnabled` | boolean | `true` | ChatBrain | AI 群聊开关；false 时 @ 未命中指令 → 无回复（chat 带仍消费但短路） |
 | `llm.chatHistoryLimit` | number | `12` | ChatBrain | 每群保留的上下文条数 |
 | `llm.chatConcurrency` | number | `3` | ChatBrain | LLM 请求并发上限（信号量） |
+| `llm.chatCooldownSeconds` | number | `3` | ChatBrain | 同一人的应答冷却秒数（窗口内再 @ 静默丢弃；0 = 不限） |
+| `llm.chatMinuteLimit` | number | `20` | ChatBrain | 同群每分钟最多触发的 LLM 应答次数（超限静默丢弃；0 = 不限） |
 | `llm.retrievalGate` | boolean | `true` | ChatBrain | 检索门：闲聊消息跳过通用检索（提速）；false 恢复总是检索（`!== false` 视为开） |
 | `llm.thinking` | boolean \| `'auto'` | `'auto'` | ChatBrain | 深度思考：`true` 恒开 / `false` 恒关 / `auto` 仅重问题（数学/证明/代码类，见 `HEAVY_RE`）开启 |
 | `llm.reasoningEffort` | string | `''` | ChatBrain | 思考强度（如 `high`，透传 `reasoning_effort`；空则用服务端默认） |

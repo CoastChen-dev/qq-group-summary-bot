@@ -130,6 +130,34 @@ describe('ChatBrain buildMessages 实名上下文与用户记忆', () => {
   });
 });
 
+describe('ChatBrain 频率限制（2026-10）', () => {
+  it('同一人冷却：窗口内第二次不放行，别人不受影响', () => {
+    const brain = new ChatBrain({ cfg: { chatCooldownSeconds: 30 } });
+    assert.equal(brain._allow('g1', 'u1'), true);
+    assert.equal(brain._allow('g1', 'u1'), false); // 冷却中
+    assert.equal(brain._allow('g1', 'u2'), true);  // 另一人不算
+  });
+
+  it('同群每分钟上限：超限丢弃，换群不受影响', () => {
+    const brain = new ChatBrain({ cfg: { chatCooldownSeconds: 0, chatMinuteLimit: 2 } });
+    assert.equal(brain._allow('g1', 'u1'), true);
+    assert.equal(brain._allow('g1', 'u2'), true);
+    assert.equal(brain._allow('g1', 'u3'), false); // 本群已用满 2 次
+    assert.equal(brain._allow('g2', 'u3'), true);  // 其他群独立计数
+  });
+
+  it('chat() 入口即拦：被限流时不进入检索/LLM，直接返回 null', async () => {
+    const brain = new ChatBrain({ cfg: { chatCooldownSeconds: 30 } });
+    assert.equal(brain._allow('g1', 'u1'), true); // 先占掉这一次
+    assert.equal(await brain.chat('g1', '张三', '在吗', 'u1'), null);
+  });
+
+  it('配置为 0：关闭单人冷却/群上限（行为与加固前一致）', () => {
+    const brain = new ChatBrain({ cfg: { chatCooldownSeconds: 0, chatMinuteLimit: 0 } });
+    for (let i = 0; i < 50; i++) assert.equal(brain._allow('g1', 'u1'), true);
+  });
+});
+
 describe('ChatBrain 工具调用（function calling）', () => {
   it('createChatTools：react_emoji 名称解析 → 调 react；未知名称返回提示不抛错', async () => {
     const reacted = [];

@@ -170,6 +170,12 @@ export class ChatBrain {
     this.wikiTimeoutMs = cfg.wikiTimeoutMs ?? 5000;
     this.moegirlTimeoutMs = cfg.moegirlTimeoutMs ?? 5000;
     this.wikipediaTimeoutMs = cfg.wikipediaTimeoutMs ?? 5000;
+    // 频率限制（2026-10）：同一人 cooldown 内只答一次（秒，0 = 不限）；同群每分钟最多 N 次
+    // LLM 调用（0 = 不限）。超限静默丢弃，不回复、不耗 token——防止单人连刷把并发与费用吃满
+    this.userCooldownMs = Math.max(0, Number(cfg.chatCooldownSeconds ?? 3)) * 1000;
+    this.groupMinuteLimit = Math.max(0, Number(cfg.chatMinuteLimit ?? 20));
+    this._lastUserAt = new Map();
+    this._groupWindow = new Map();
     // 深度思考（llm.thinking）：true 恒开 / false 恒关 / 'auto'（默认）= 仅重问题（数学/证明/代码等）开启；
     // reasoningEffort 透传（如 'high'）——思考模式提升推理类问题质量，闲聊保持快速；
     // thinkingMaxTokens 为思考调用单独的输出预算（思维链计入输出，预算不足会只出思维链、正文为空）
@@ -349,6 +355,40 @@ export class ChatBrain {
   }
 
   /**
+   * 频率限制判定（每次 chat() 入口调一次；通过即计数）。
+   * 规则：同一 QQ 在 userCooldownMs 内只放行一次；同群每分钟放行 groupMinuteLimit 次。
+   * 内存态只保留小表：用户表超过 5000 条时顺手清掉 10 分钟前的记录，群表每群一条。
+   * @param {string|number} groupId - 群号
+   * @param {string|number} [userId] - 发送者 QQ（为空时跳过单人冷却）
+   * @returns {boolean} true = 放行；false = 本次应静默丢弃
+   */
+  _allow(groupId, userId) {
+    const now = Date.now();
+    const uid = String(userId || '');
+    if (uid && this.userCooldownMs > 0) {
+      const last = this._lastUserAt.get(uid) ?? 0;
+      if (now - last < this.userCooldownMs) return false;
+      this._lastUserAt.set(uid, now);
+      if (this._lastUserAt.size > 5000) {
+        for (const [k, t] of this._lastUserAt) {
+          if (now - t > 10 * 60 * 1000) this._lastUserAt.delete(k);
+        }
+      }
+    }
+    if (this.groupMinuteLimit > 0) {
+      const gid = String(groupId);
+      const w = this._groupWindow.get(gid);
+      if (!w || now - w.start >= 60000) {
+        this._groupWindow.set(gid, { start: now, count: 1 });
+      } else {
+        if (w.count >= this.groupMinuteLimit) return false;
+        w.count++;
+      }
+    }
+    return true;
+  }
+
+  /**
    * 群聊应答主入口（路由 S13 调用）：本地快路（生日/干员资料/藏品/词典/缓存）全部不中才联网检索并落 LLM；
    * 14 步关键顺序见方法体内注释。各快路与兜底的回复都经 _reply 统一发出并写群历史。
    *
@@ -357,7 +397,7 @@ export class ChatBrain {
    * @param {string} question - 剥 @ 后的问题文本
    * @param {string} [userId=''] - 发送者 QQ
    * @param {Object} [opts={}] - 附加上下文：{messageId} 透传给 LLM 工具（如贴表情定位消息）、{faces} 消息里的表情段 ID
-   * @returns {Promise<string|null>} null = chatEnabled=false 整链短路；否则为回复文案
+   * @returns {Promise<string|null>} null = chatEnabled=false 整链短路，或触发频率限制被丢弃；否则为回复文案
    *   （LLM 失败时 = defaultReply 兜底文案，不向外抛错）
    * 副作用：追加群历史（内存）、可写知识缓存文件（联网检索出上下文时）
    */
@@ -368,6 +408,11 @@ export class ChatBrain {
     // → ⑪词典置顶 → ⑫评分排序 → ⑬拼接上下文并写缓存 → ⑭_reply 调 LLM（成功才写历史）
     // 注：与函数内既有「1.本地词典 / 2.知识缓存 / 3.联网检索」的检索段局部编号并存，两套编号不同义
     if (!this.enabled) return null; // ① chatEnabled=false：整链短路（不发不耗 LLM）
+    // ①' 频率限制：同一人冷却 / 同群每分钟上限，超限静默丢弃（不回复、不进入检索与 LLM）
+    if (!this._allow(groupId, userId)) {
+      log(`[chat] 群 ${groupId} 用户 ${userId} 触发频率限制，跳过本次应答`);
+      return null;
+    }
 
     // ② 话题相关性判定（isArk），决定后面是否检索 PRTS
     const lingoHit = this.lingo.lookup(question);
