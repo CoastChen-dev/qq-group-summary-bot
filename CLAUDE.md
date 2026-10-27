@@ -25,9 +25,10 @@ QQ 对自动化账号有阶梯式风控（提示 → 限制 → 冻结 7/30 天 
 3. **重启纪律**：每次重启都会触发 backfill 评估（历史上单日 24 次重启 + 133 次历史拉取是风控直接诱因）；开发期用测试配置，避免频繁启动生产实例。
 4. **高风险接口清单**（改动前评估频率）：`get_group_msg_history`（backfill）、`set_msg_emoji_like`（贴表情）、`send_group_msg`（发送）。
 5. **降险机制不得回退**（改相关代码时保持；2026-10 已按需放宽到「适中」档）：
-   - backfill：离线 < `backfill.minOfflineMinutes`（默认 5 分钟）整体跳过；单群水位 < 2 分钟跳过；单群 `count: 200`；群间错峰 `backfillStaggerMs`（默认 300ms）
+   - backfill：离线 < `backfill.minOfflineMinutes`（默认 5 分钟）整体跳过；单群水位 < 2 分钟跳过；单群分页拉取（每页 200 条、最多 5 页 = 1000 条，翻到水位或历史尽头即停）；群间/页间错峰 `backfillStaggerMs`（默认 300ms）
    - backfill 触发时序（2026-10 实测修复）：离线水位必须在 `store.touchConnected()` **之前**读（routing.onEvent 顶部），读晚一步会被心跳覆盖成 now → 补偿恒跳过；`backfillDone` 在 disconnect 时复位，长断线重连能再补一次，短断线仍由 5 分钟门槛挡住
-   - 数据刷新：`.tmp` → rename 原子替换，成功后清历史 `.bak`（不再每次留一份 39MB 旧表）
+   - 数据刷新：`.tmp` → rename 原子替换，成功后清历史 `.bak`（不再每次留一份 39MB 旧表）；手动/定时/WebUI 三触发源**单飞**，并发触发复用同一个任务，不重复下载
+   - 出站文本：超过 3500B 一律经 `core/platform/text.js` 的 splitMessage 切条发送（第一条 @、其余纯文本），避免 QQ 单条上限拒发
    - 重连：指数退避 3s→30s 封顶，且连接持续稳定 30s 后才复位（连上就断不重置，core/platform/napcat.js）
    - 内存：MessageStore 每群只保留最近 72h 消息（`retentionHours`），更早的清出内存、磁盘 JSONL 保留，按需 `loadFromDisk` 补载（2026-10）
    - 贴表情：同群冷却 `emojiLike.cooldownSeconds`（默认 5s）
