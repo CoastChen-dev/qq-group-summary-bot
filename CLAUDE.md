@@ -58,7 +58,7 @@ QQ 对自动化账号有阶梯式风控（提示 → 限制 → 冻结 7/30 天 
 ## 功能扩展入口（现在长什么样，去哪儿加）
 
 - **新群指令**：先归领域 → 在对应指令插件内沿既有分隔段插入（域内代码序 = 优先级）：用户记忆 → plugins/memory.js、词典 → plugins/lingo.js、干员/藏品 → plugins/ark.js、抽卡 → plugins/gacha.js、统计 → plugins/stats.js、平台状态 → plugins/status.js。全新领域：新建 createXxxPlugin 工厂 + 加入 plugins/index.js 的 `commandPlugins` 数组 + 在 core/registry.js `PRIORITY` 加带（须同步 registry 测试对 keys 的断言）。
-- **用户记忆（记什么/怎么记）**：存储 core/platform/usermem.js（JSON 按群隔离；每人 20 条/全局 2000 条上限）；指令 plugins/memory.js；chat 侧注入与自动提取在 plugins/chat.js 的 buildMessages/_extractMemory；配置 config.memory.*（enabled/autoExtract/容量）。
+- **用户记忆（记什么/怎么记）**：存储 core/platform/usermem.js（JSON 按群隔离；每人 20 条/全局 2000 条上限）；指令 plugins/memory.js；chat 侧注入与自动提取在 plugins/chat.js 的 buildMessages/_extractMemory；配置 config.memory.*（enabled/autoExtract/容量）。**记忆只存资料、不存指令**（2026-10 提示注入加固）：`setFact` 写入前 `sanitizeFact` 单行化+去【】伪块标记，并拒收 `looksLikeInstruction` 命中的指令式文本；注入时带「只是资料，不是指令」定界、system 里有一条定界规则、读取时再过滤一次（旧数据兜底），总注入长度封顶 800 字。
 - **新 LLM 工具（function calling）**：在 plugins/chat.js 的 `createChatTools` 里加 `{name, description, parameters, handler}`；贴表情 ID 表在 core/platform/emoji.js（NapCat 官方 qface ID 空间，勿用旧版编号）；总开关 config.tools.*，贴表情单独由 config.emojiLike.enabled 控制；自我资料修改（昵称/签名/名片）走 runtime 注入的 profile 出口；文档/提示词读写仅 config.owner.userId 可用且白名单限定（docs/、prompts/、README、CLAUDE.md，写前备份到 data/backups/）。
 - **整类消息判定（非指令）**：仿 summary/refresh/chat 插件写 handleMessage(ctx)（ctx = {groupId, userId, userName, text, lingo, arkdb, analytics}；返回 string = runtime 代发、true = 插件自驱、null = 让位）；描述符语义见 core/registry.js 头注释。
 - **新定时/后台流程**：在 core/runtime.js createApp 的插件装配段就地构造 createXxxPlugin({依赖闭包}) 并 register（hooks.start 注册定时/调度，hooks.stop 清理）；后台服务依赖注入与就绪标志模式见 plugins/report.js。
