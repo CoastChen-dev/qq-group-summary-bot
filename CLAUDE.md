@@ -30,7 +30,9 @@ QQ 对自动化账号有阶梯式风控（提示 → 限制 → 冻结 7/30 天 
    - 数据刷新：`.tmp` → rename 原子替换，成功后清历史 `.bak`（不再每次留一份 39MB 旧表）；手动/定时/WebUI 三触发源**单飞**，并发触发复用同一个任务，不重复下载
    - 出站文本：超过 3500B 一律经 `core/platform/text.js` 的 splitMessage 切条发送（第一条 @、其余纯文本），避免 QQ 单条上限拒发
    - 重连：指数退避 3s→30s 封顶，且连接持续稳定 30s 后才复位（连上就断不重置，core/platform/napcat.js）
-   - 内存：MessageStore 每群只保留最近 72h 消息（`retentionHours`），更早的清出内存、磁盘 JSONL 保留，按需 `loadFromDisk` 补载（2026-10）
+   - 内存：MessageStore 每群只保留最近 72h 消息（`retentionHours`），更早的清出内存、磁盘 JSONL 保留，按需 `loadFromDisk` 补载；`writtenIds` 去重闸同步回收（窗口外 id 不会被 backfill 拉回，窗口内仍严格防重）（2026-10）
+   - LLM 限流：同一人 `llm.chatCooldownSeconds`（默认 3s）冷却、同群 `llm.chatMinuteLimit`（默认 20 次/分钟）；超限**静默丢弃**（不回复、不耗 token），只记日志
+   - 进程兜底：`main` 装 `core/platform/lifecycle.js` 的 installProcessGuards——未处理拒绝/未捕获异常只记日志不退出；SIGINT/SIGTERM → `app.stop()` + `analytics.close()` + 200ms 后 exit（勿在 createApp/start 里装，测试路径保持零信号副作用）
    - 贴表情：同群冷却 `emojiLike.cooldownSeconds`（默认 5s）
    - 发表情消息：同群发送间隔 `emojiLike.sendCooldownSeconds`（默认 3s，排队节流不丢弃）
    - 出站内容：chat 插件发送前 `isSensitive` 兜底替换（命中即换安全文案）
@@ -64,7 +66,7 @@ QQ 对自动化账号有阶梯式风控（提示 → 限制 → 冻结 7/30 天 
 - **新定时/后台流程**：在 core/runtime.js createApp 的插件装配段就地构造 createXxxPlugin({依赖闭包}) 并 register（hooks.start 注册定时/调度，hooks.stop 清理）；后台服务依赖注入与就绪标志模式见 plugins/report.js。
 - **新知识源 / 调整检索编排**：plugins/chat.js 的 `ChatBrain.chat()` 主流程（本地快路 → 缓存 → 联网检索 → 排序 → `_reply`）；检索器本体按惯例放 core/knowledge/ 并由 runtime 装配为共享单例注入（联网搜索 websearch.js 由 config.webSearch 配置，启用后取代萌娘/维基）。
 - **新本地数据表**：core/knowledge/arkdb.js 读 + core/platform/refresher.js 下载/校验；数据文件约定见 [docs/data-format.md](docs/data-format.md)。
-- **面板新接口**：plugins/webui.js（零依赖 node:http，页面内联）。
+- **面板新接口**：plugins/webui.js（零依赖 node:http，页面内联）。**安全闸**：`webui.host` 非本机地址且 `webui.token` 为空时 `start()` 直接抛错拒绝启动；`_body` 在超 1MB/客户端中断/读错误时都必须结算（曾因只在 `end` resolve 而永久悬挂）。
 - **@机器人 人设与回复规则**：人设提示词在 `prompts/chat-system.md`（她可自我编辑、即改即生效；代码内置默认为回退）；Summarizer 两套 prompt 在 core/platform/summarizer.js。
 
 ## 结构方向（重要）
