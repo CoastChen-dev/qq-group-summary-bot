@@ -166,7 +166,7 @@ S# 编号保留为行为契约锚点（CLAUDE.md 红线与 refactor-proposal 保
 
 ### 6.1 离线补偿 backfillHistory（core/routing.js createRouting 内，connect 生命周期内，仅一次）
 
-**每群独立起点** `sinceTs = max(该群 lastSeenTs, now − backfill.maxHours×3600)`（默认 72h 兜底；2026-09 修复坑 9：原为全局单值——单群拉取失败会把别群水位推高，该群缺口永远错过；现按群存储于 data/state/lastSeen.json 的 `{"byGroup"}`，群间互不钳制）；**风控降险（2026-09；2026-10 放宽到适中档）**：距上次在线 < `backfill.minOfflineMinutes`（默认 5 分钟，上次在线时刻即 data/state/runtime.json 的 lastConnectedAt，由**在线心跳**每分钟节流更新，长跑实例重启不算长时间离线）时整体跳过补拉；水位较新（2 分钟内）的群跳过；单群 `count: 200`；群间错峰 `backfillStaggerMs`（默认 300ms，测试传 0）；群集合 = `config.groups` 非空用之，否则 `get_group_list`（失败回退磁盘已跟踪群）；每群 `get_group_msg_history(message_seq:0, count:200)` → 过滤 `time ≥ sinceTs` 与批内重复 → 逐条 `store.addHistoryMessage`（与内存/磁盘双去重）+ `analytics.record`；该群有新增才 `setLastSeenTs(gid, latest)`（每群只增不减）；单群失败记日志继续。
+**每群独立起点** `sinceTs = max(该群 lastSeenTs, now − backfill.maxHours×3600)`（默认 72h 兜底；2026-09 修复坑 9：原为全局单值——单群拉取失败会把别群水位推高，该群缺口永远错过；现按群存储于 data/state/lastSeen.json 的 `{"byGroup"}`，群间互不钳制）；**风控降险（2026-09；2026-10 放宽到适中档）**：距上次在线 < `backfill.minOfflineMinutes`（默认 5 分钟，上次在线时刻即 data/state/runtime.json 的 lastConnectedAt，由**在线心跳**每分钟节流更新，长跑实例重启不算长时间离线）时整体跳过补拉；水位较新（2 分钟内）的群跳过；单群分页拉取（每页 200 条、最多 5 页 = 1000 条，2026-10）；群间/页间错峰 `backfillStaggerMs`（默认 300ms，测试传 0）；群集合 = `config.groups` 非空用之，否则 `get_group_list`（失败回退磁盘已跟踪群）；每群从 `get_group_msg_history(message_seq:0, count:200)` 起按本页最早 message_seq 连续翻页（翻到 sinceTs / 历史尽头 / 无推进即停）→ 过滤 `time ≥ sinceTs` 与批内重复 → 逐条 `store.addHistoryMessage`（与内存/磁盘双去重）+ `analytics.record`；该群有新增才 `setLastSeenTs(gid, latest)`（每群只增不减）；单群失败记日志继续。
 
 ### 6.2 每日日报 dailyReport（report 插件，hooks.start 经 scheduler.start 注册每日回调，时刻取 `report.hour/minute`，缺省 9:00）
 

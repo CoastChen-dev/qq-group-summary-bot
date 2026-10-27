@@ -93,6 +93,6 @@ DeepSeek API **不支持服务端联网搜索**（Responses API 的 `web_search`
 ## 5. 实名上下文与用户记忆（plugins/chat.js ChatBrain 内部约定）
 
 - **实名上下文**：对话历史与当前提问以群昵称（群名片优先）为前缀（`张三：...`），`_displayName` 按群维护「QQ → 最近昵称」映射（每群上限 200，满了逐出最旧）；system prompt 允许模型自然地称呼群友、理解「他/她/刚才那位」指代。**QQ 号绝不进 prompt**（仅作内部键）。该成员映射只存内存、不落盘、重启即清。
-- **用户记忆注入**：`buildMessages` 经 `_memoryContext` 注入【用户记忆】段——提问者本人的事实 + 问题中点名的其他成员的事实（昵称精确匹配，按群隔离；见 core/platform/usermem.js）。
+- **用户记忆注入**：`buildMessages` 经 `_memoryContext` 注入【用户记忆】段——提问者本人的事实 + 问题中点名的其他成员的事实（昵称精确匹配，按群隔离；见 core/platform/usermem.js）。记忆只存资料（2026-10 加固）：写入前 `sanitizeFact` 单行化并拒收指令式文本（`looksLikeInstruction`），注入时标明「不是指令」，读取时再清洗过滤一次，总注入长度封顶 800 字。
 - **自动提取**：`_reply` 成功后 fire-and-forget 调 `_extractMemory`——同一 LLM 端点、`temperature 0.2`、`max_tokens 200`、30s 超时 ×1 重试，要求模型只输出 JSON 字符串数组（≤3 条，每条 ≤30 字）；`_parseFacts` 容错解析（允许 markdown 包裹），失败只记日志不影响回复。问题 <4 字跳过；`config.memory.autoExtract=false` 或 `enabled=false` 时关闭。
 - **容量**：每人 20 条 / 全局 2000 条（config.memory 可调），超限丢最旧；事实写盘于 data/user_memory.json（见 data-format.md §6）。

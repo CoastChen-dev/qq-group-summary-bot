@@ -33,7 +33,7 @@ data/
 
 - **写入方**：`store.addMessage`（实时群事件）与 `addHistoryMessage`（backfill 历史）；同步 `appendFileSync`，写在一切路由判断之前。
 - **读取方**：`loadFromDisk(gid, [startTs, endTs])`——启动预载只扫今天；日报按日期段载入。逐行去重入内存；发现坏行或重复行会**整文件重写去重**（日志「已去重」）。
-- **去重闸**：内存 `writtenIds`（`"群号:消息id"`）防重复写；重启后靠 loadFromDisk 的文件级去重重建。
+- **去重闸**：内存 `writtenIds`（`"群号:消息id"`）防重复写；重启后靠 loadFromDisk 的文件级去重重建；随 72h 内存保留窗口一起回收（窗口外 id 不会被 backfill 拉回，窗口内仍严格防重）。
 - **容错**：坏行跳过；写失败不包 try → 异常中断该消息路由（现状行为，勿"修复"）。
 
 ## 2. state 状态（JSON 覆盖写）
