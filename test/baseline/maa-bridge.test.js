@@ -39,6 +39,11 @@ before(async () => {
       if (req.method === 'GET' && req.url === '/job/job1') {
         return send(200, { ok: true, id: 'job1', state: 'done', elapsed: 3, drops: { 龙门币: 5 }, chains: ['Fight'], error: '' });
       }
+      if (req.method === 'GET' && req.url === '/screenshot') {
+        const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 1, 2, 3]);
+        res.writeHead(200, { 'Content-Type': 'image/png', 'Content-Length': png.length });
+        return res.end(png);
+      }
       if (req.method === 'GET' && req.url === '/job/nope') return send(404, { ok: false, error: 'unknown job' });
       if (req.method === 'POST' && req.url === '/stop') return send(200, { ok: true });
       return send(404, { ok: false, error: 'not found' });
@@ -79,6 +84,15 @@ describe('MaaBridge HTTP 客户端', () => {
       return true;
     });
     await assert.rejects(() => bridge.job('nope'), (e) => e.status === 404);
+    bridge.close();
+  });
+
+  it('screenshot：走二进制路径返回 PNG Buffer', async () => {
+    const bridge = new MaaBridge({ baseUrl, token: 'tok', autoSpawn: false });
+    await bridge.start();
+    const png = await bridge.screenshot();
+    assert.ok(Buffer.isBuffer(png));
+    assert.deepEqual(png.subarray(0, 4), Buffer.from([0x89, 0x50, 0x4e, 0x47]));
     bridge.close();
   });
 

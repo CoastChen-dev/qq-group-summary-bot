@@ -209,6 +209,20 @@ export class NapCatClient {
   }
 
   /**
+   * 发群图片（MAA 截图等）：base64:// 段，NapCat 直接解码上传；caption 非空时同一消息先发文字。
+   * @param {string|number} groupId - 目标群号
+   * @param {Buffer} image - 图片字节（PNG/JPEG 均可）
+   * @param {string} [caption=''] - 图片前的说明文字
+   * @returns {Promise<Object>} 发送结果（含 message_id）
+   */
+  sendGroupImage(groupId, image, caption = '') {
+    const message = [];
+    if (caption) message.push({ type: 'text', data: { text: caption } });
+    message.push({ type: 'image', data: { file: `base64://${Buffer.from(image).toString('base64')}` } });
+    return this.call('send_group_msg', { group_id: groupId, message });
+  }
+
+  /**
    * 发群消息并真 @ 指定成员（OneBot 段式消息 [at, text]，被 @ 者会收到提醒）——回答提问者用
    * （routing S10/S12 指令回复、chat 插件 LLM 回复、refresh 手动回执；broadcast 播报不加 @）。
    * @param {string|number} groupId - 目标群号

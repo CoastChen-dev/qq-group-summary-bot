@@ -174,6 +174,31 @@ export class MaaBridge {
     return this._req('GET', `/job/${encodeURIComponent(jobId)}`);
   }
 
+  /**
+   * 现截一张模拟器画面（PNG）。
+   * @returns {Promise<Buffer>} PNG 字节
+   * 副作用：worker 调 AsstAsyncScreencap + AsstGetImage；任务运行中可能失败（抛 status=503）
+   */
+  async screenshot() {
+    if (!this.baseUrl) throw new MaaBridgeError('maa bridge 未启动');
+    let res;
+    try {
+      res = await fetch(`${this.baseUrl}/screenshot`, {
+        headers: this.token ? { 'X-Maa-Token': this.token } : {},
+        signal: AbortSignal.timeout(this.requestTimeoutMs),
+      });
+    } catch (e) {
+      throw new MaaBridgeError(`maa 截图请求失败: ${e.message}`);
+    }
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      throw new MaaBridgeError(data.error || `maa 截图 HTTP ${res.status}`, res.status);
+    }
+    const buf = Buffer.from(await res.arrayBuffer());
+    if (!buf.length) throw new MaaBridgeError('maa 截图返回空');
+    return buf;
+  }
+
   /** 停止当前任务 */
   stop() {
     return this._req('POST', '/stop', {});

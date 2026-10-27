@@ -66,6 +66,30 @@ describe('NapCatClient 调用结算', () => {
     }
   });
 
+  test('sendGroupImage：文字 + base64 图片段（MAA 截图路径）', async () => {
+    const frames = [];
+    const srv = await mkServer((ws, msg) => {
+      frames.push(msg);
+      ws.send(JSON.stringify({ echo: msg.echo, status: 'ok', retcode: 0, data: { message_id: 1 } }));
+    });
+    const client = new NapCatClient(`ws://127.0.0.1:${srv.port}`, { reconnectDelay: 50 });
+    try {
+      const connected = waitConnect(client);
+      client.connect();
+      await connected;
+
+      await client.sendGroupImage(123, Buffer.from([0x89, 0x50]), '【MAA 截图】');
+      const message = frames[0].params.message;
+      assert.equal(message[0].type, 'text');
+      assert.equal(message[0].data.text, '【MAA 截图】');
+      assert.equal(message[1].type, 'image');
+      assert.ok(message[1].data.file.startsWith('base64://'));
+    } finally {
+      client.close();
+      await srv.close();
+    }
+  });
+
   test('断线：在途调用立刻拒绝，不等 15s 超时', async () => {
     const srv = await mkServer((ws) => ws.close()); // 收到任何调用就断开
     const client = new NapCatClient(`ws://127.0.0.1:${srv.port}`, { reconnectDelay: 50 });

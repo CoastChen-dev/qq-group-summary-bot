@@ -9,12 +9,14 @@ bot 侧只跟 HTTP/JSON 打交道。
   GET  /status          -> {ok, version, connected, running, job}
   POST /task            -> {ok, job_id}     body: {type, params}；已有任务在跑时 409
   GET  /job/<id>        -> {state, elapsed, drops, chains, error, events}
+  GET  /screenshot      -> image/png（当前模拟器画面，MaaCore 现截）
   POST /stop            -> {ok}
   POST /connect         -> {ok, connected}  重新 adb 连接
 
 启动时向 stdout 打印 `MAA_BRIDGE_PORT=<port>`（--port 0 时由系统分配），bot 据此拿端口。
 """
 import argparse
+import ctypes
 import json
 import os
 import sys
@@ -115,6 +117,17 @@ def main():
     except Exception:
         state['version'] = ''
 
+    # 截图：MaaCore 只导出 AsstAsyncScreencap / AsstGetImage，asst.py 没包装，直接按 C ABI 调。
+    # AsstGetImage 返回 PNG 字节（实测 magic \x89PNG）；缓冲按 24MB 预留，够 4K 截图。
+    lib = Asst._Asst__lib
+    lib.AsstAsyncScreencap.argtypes = (ctypes.c_void_p, ctypes.c_bool)
+    lib.AsstAsyncScreencap.restype = ctypes.c_bool
+    lib.AsstGetImage.argtypes = (ctypes.c_void_p, ctypes.c_void_p, ctypes.c_uint64)
+    lib.AsstGetImage.restype = ctypes.c_uint64
+    asst_ptr = asst._Asst__ptr
+    SHOT_SIZE = 24 * 1024 * 1024
+    shot_buf = (ctypes.c_byte * SHOT_SIZE)()
+
     def connect():
         with STATE_LOCK:
             if state['connected']:
@@ -192,6 +205,23 @@ def main():
                     if not job:
                         return self._send(404, {'ok': False, 'error': 'unknown job'})
                     return self._send(200, {'ok': True, **job_public(job)})
+            if path == '/screenshot':
+                if not connect():
+                    return self._send(502, {'ok': False, 'error': state['last_error'] or 'connect failed'})
+                with STATE_LOCK:
+                    captured = bool(lib.AsstAsyncScreencap(asst_ptr, True))
+                if not captured:
+                    return self._send(503, {'ok': False, 'error': '截图失败（任务运行中或设备无响应）'})
+                n = int(lib.AsstGetImage(asst_ptr, shot_buf, SHOT_SIZE))
+                if not 0 < n <= SHOT_SIZE:
+                    return self._send(503, {'ok': False, 'error': '取图失败'})
+                png = bytes(shot_buf)[:n]
+                self.send_response(200)
+                self.send_header('Content-Type', 'image/png')
+                self.send_header('Content-Length', str(len(png)))
+                self.end_headers()
+                self.wfile.write(png)
+                return
             return self._send(404, {'ok': False, 'error': 'not found'})
 
         def do_POST(self):

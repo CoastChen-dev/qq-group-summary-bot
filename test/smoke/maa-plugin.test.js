@@ -15,8 +15,8 @@ after(silenceLog());
 const tick = (ms) => new Promise((r) => setTimeout(r, ms));
 
 /** 假 bridge：可配置 submit 行为与任务终态 */
-function mkBridge({ jobState = 'done', submitError = null, status = {} } = {}) {
-  const calls = { submit: [], job: 0, stop: 0 };
+function mkBridge({ jobState = 'done', submitError = null, status = {}, screenshot = null } = {}) {
+  const calls = { submit: [], job: 0, stop: 0, screenshot: 0 };
   return {
     calls,
     baseUrl: 'http://stub',
@@ -35,6 +35,11 @@ function mkBridge({ jobState = 'done', submitError = null, status = {} } = {}) {
       return { id: 'j1', state: jobState, elapsed: 65, drops: { 龙门币: 5 }, chains: ['Fight'], error: '' };
     },
     async stop() { calls.stop++; },
+    async screenshot() {
+      calls.screenshot++;
+      if (!screenshot) throw Object.assign(new Error('截图失败'), { status: 503 });
+      return screenshot;
+    },
   };
 }
 
@@ -45,6 +50,7 @@ function mkClient() {
     sent,
     sendGroupMsg: async (gid, msg) => { sent.push({ gid, msg }); },
     sendGroupMsgAt: async (gid, uid, msg) => { sent.push({ gid, uid, msg }); },
+    sendGroupImage: async (gid, png, caption) => { sent.push({ gid, png, caption }); },
   };
 }
 
@@ -125,6 +131,24 @@ describe('MAA 指令插件：指令解析与回执', () => {
     assert.match(sent[0].msg, /MaaCore：v6\.20\.1/);
     assert.match(sent[0].msg, /设备：已连接/);
     assert.equal(sent[0].uid, 10001);
+  });
+
+  it('截图：取图并作为图片消息发到群（带说明）', async () => {
+    const png = Buffer.from([0x89, 0x50, 0x4e, 0x47]);
+    const { plugin, sent, bridge } = mkPlugin({ bridge: mkBridge({ screenshot: png }) });
+    assert.equal(plugin.handleMessage(ctx('maa 截图')), true);
+    await tick(20);
+    assert.equal(bridge.calls.screenshot, 1);
+    assert.equal(sent.length, 1);
+    assert.equal(sent[0].png, png);
+    assert.match(sent[0].caption, /MAA 截图/);
+  });
+
+  it('截图失败：提示原因', async () => {
+    const { plugin, sent } = mkPlugin(); // 默认 bridge.screenshot 抛 503
+    plugin.handleMessage(ctx('maa 截图'));
+    await tick(20);
+    assert.match(sent[0].msg, /截图失败/);
   });
 
   it('停止：调用 bridge.stop 并回执', async () => {

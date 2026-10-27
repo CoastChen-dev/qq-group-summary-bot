@@ -28,6 +28,7 @@ const HELP = [
   'maa 刷图 <关卡> [次数] —— 如「maa 刷图 CE-6 5」',
   'maa 公招 [次数] —— 自动公招（默认 4 次）',
   'maa 基建 —— 基建换班 + 无人机加速',
+  'maa 截图 —— 把当前模拟器画面发到群里',
   'maa 停止 —— 停止当前任务',
 ].join('\n');
 
@@ -139,6 +140,19 @@ export function createMaaPlugin({ bridge, client, ownerId, pollIntervalMs = 2000
           s.last_error ? `备注：${s.last_error}` : '',
         ].filter(Boolean).join('\n'), true);
       }).catch((e) => send(ctx, `【MAA】状态查询失败：${e.message}`, true));
+      return true;
+    }
+    if (/^(截图|截屏|screenshot|screen)$/i.test(head)) {
+      bridge.screenshot().then((png) => {
+        if (!client || typeof client.sendGroupImage !== 'function') {
+          send(ctx, '【MAA】当前客户端不支持发图', true);
+          return;
+        }
+        const caption = `【MAA 截图】${new Date().toLocaleString('zh-CN', { hour12: false })}`;
+        Promise.resolve(client.sendGroupImage(ctx.groupId, png, caption))
+          .catch((e) => send(ctx, `【MAA】截图发送失败：${e.message}`, true));
+        log(`[maa] 截图 ${Math.round(png.length / 1024)}KB`);
+      }).catch((e) => send(ctx, `【MAA】截图失败：${e.message}`, true));
       return true;
     }
     if (/^(停止|stop)$/i.test(head)) {
