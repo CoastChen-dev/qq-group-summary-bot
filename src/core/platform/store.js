@@ -122,7 +122,8 @@ export class MessageStore {
     // users 群成员名片缓存（userId → {name, card}）；lastSummaryAt 最后概括时间（秒，0 = 从未概括）；
     // newestTime 该群内存里最新一条的 time（清理窗口的锚点）
     this.groups = new Map();
-    // 已写盘闸 "群号:消息id"：防同一条消息重复追加 JSONL。只增不减——一旦写入终身有效；
+    // 已写盘闸 "群号:消息id"：防同一条消息重复追加 JSONL。保留最近 retentionHours 窗口——
+    // 与内存消息一起清理（窗口外的 id 不会被 backfill 再拉回，见 _pruneMessages）；
     // 重启后由 loadFromDisk 扫盘逐行重建，保证跨进程幂等
     this.writtenIds = new Set();
     // 各群最后在线时间（秒，群号 String 归一）：backfill 补偿按群的起点水位（见
@@ -270,9 +271,10 @@ export class MessageStore {
 
   /**
    * 内存保留窗口清理（2026-10）：把该群 messages 里早于 newestTime − retentionHours 的记录
-   * 从内存删掉，磁盘 JSONL 与 writtenIds 不动（需要时 loadFromDisk 可原样读回；重复落库仍被
-   * writtenIds 挡住）。锚点用组内最新消息时间而非墙钟——测试/补历史时不会误删；组内最新
-   * 时间每前进 10 分钟才扫一次，避免每条消息都全表扫。
+   * 从内存删掉，磁盘 JSONL 不动（需要时 loadFromDisk 可原样读回）。同时回收这些 id 的
+   * writtenIds 闸位——否则去重表会随运行时长无限涨；窗口外的 id 不会再被 backfill 拉回
+   * （backfill 起点 ≥ now − backfillMaxHours，默认 72h = retentionHours），窗口内仍严格防重。
+   * 锚点用组内最新消息时间而非墙钟——测试/补历史时不会误删；组内最新时间每前进 10 分钟才扫一次。
    * @param {string|number} groupId - 群号
    * @param {Object} g - 该群内存态
    * @returns {number} 本次清出的条数
@@ -287,6 +289,7 @@ export class MessageStore {
     for (const [id, rec] of g.messages) {
       if ((rec.time ?? 0) < cutoff) {
         g.messages.delete(id);
+        this.writtenIds.delete(`${groupId}:${id}`);
         removed++;
       }
     }
