@@ -61,6 +61,7 @@
 | `maa.python` | string | `python` | MaaBridge | 跑 worker 的 Python 解释器（需能 import ctypes，MAA 自带绑定） |
 | `maa.adbPath` / `maa.adbAddress` | string | `adb.exe` / `127.0.0.1:5555` | worker.py → MaaCore | adb 可执行文件与设备地址（MuMu 常见 `127.0.0.1:16384`） |
 | `maa.connectConfig` | string | `General` | worker.py → MaaCore | MAA 连接配置名（如 `MuMuEmulator12`） |
+| `maa.clientType` | string | `Official` | maa 插件 → StartUp/Fight | 客户端类型：`Official` / `Bilibili` / `txwy` / `YoStarEN` / `YoStarJP` / `YoStarKR`（决定启动哪个游戏包） |
 | `maa.workerPort` | number | `0` | MaaBridge | worker 端口（0 = 系统分配） |
 | `maa.taskTimeoutMinutes` | number | `60` | worker.py | 单任务超时后自动停止 |
 | `maa.pollIntervalSeconds` | number | `2` | maa 插件 | 结果轮询间隔（秒） |

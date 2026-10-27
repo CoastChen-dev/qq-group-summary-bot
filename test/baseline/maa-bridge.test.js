@@ -87,6 +87,21 @@ describe('MaaBridge HTTP 客户端', () => {
     bridge.close();
   });
 
+  it('submitMany：任务链按 {tasks:[{type,params}]} 提交', async () => {
+    const bridge = new MaaBridge({ baseUrl, token: 'tok', autoSpawn: false });
+    await bridge.start();
+    const r = await bridge.submitMany([
+      { type: 'StartUp', params: { client_type: 'Bilibili' } },
+      { type: 'Award', params: {} },
+    ]);
+    assert.equal(r.job_id, 'job1');
+    const req = seen.filter((x) => x.url === '/task').at(-1);
+    assert.deepEqual(JSON.parse(req.body), {
+      tasks: [{ type: 'StartUp', params: { client_type: 'Bilibili' } }, { type: 'Award', params: {} }],
+    });
+    bridge.close();
+  });
+
   it('screenshot：走二进制路径返回 PNG Buffer', async () => {
     const bridge = new MaaBridge({ baseUrl, token: 'tok', autoSpawn: false });
     await bridge.start();

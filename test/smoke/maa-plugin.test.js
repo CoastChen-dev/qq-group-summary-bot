@@ -16,7 +16,7 @@ const tick = (ms) => new Promise((r) => setTimeout(r, ms));
 
 /** 假 bridge：可配置 submit 行为与任务终态 */
 function mkBridge({ jobState = 'done', submitError = null, status = {}, screenshot = null } = {}) {
-  const calls = { submit: [], job: 0, stop: 0, screenshot: 0 };
+  const calls = { submit: [], job: 0, stop: 0, screenshot: 0, connect: 0 };
   return {
     calls,
     baseUrl: 'http://stub',
@@ -25,11 +25,15 @@ function mkBridge({ jobState = 'done', submitError = null, status = {}, screensh
     async status() {
       return { ok: true, version: 'v6.20.1', connected: true, running: false, job: null, last_error: '', ...status };
     },
-    async submit(type, params) {
+    async submitMany(tasks) {
       if (submitError) throw submitError;
-      calls.submit.push([type, params]);
+      calls.submit.push(tasks);
       return { job_id: 'j1' };
     },
+    async submit(type, params) {
+      return this.submitMany([{ type, params }]);
+    },
+    async connect() { calls.connect++; return { ok: true, connected: true }; },
     async job() {
       calls.job++;
       return { id: 'j1', state: jobState, elapsed: 65, drops: { 龙门币: 5 }, chains: ['Fight'], error: '' };
@@ -95,18 +99,30 @@ describe('MAA 指令插件：指令解析与回执', () => {
     const { plugin, bridge, sent } = mkPlugin();
     assert.equal(plugin.handleMessage(ctx('maa 刷图 CE-6 5')), true);
     await tick(60); // 等 submit → ack → 轮询（5ms）→ 完成回执
-    assert.deepEqual(bridge.calls.submit, [['Fight', { stage: 'CE-6', times: 5 }]]);
+    assert.deepEqual(bridge.calls.submit, [[{ type: 'Fight', params: { stage: 'CE-6', times: 5, client_type: 'Official' } }]]);
     assert.equal(sent[0].uid, 10001); // 回执真 @ 主人
     assert.match(sent[0].msg, /刷图 CE-6 ×5 已开始/);
     assert.match(sent[1].msg, /刷图 CE-6 ×5 完成（1 分 5 秒）/);
     assert.match(sent[1].msg, /龙门币×5/);
   });
 
+  it('唤醒：StartUp 带上 clientType（B 服/官服决定启动哪个包）', async () => {
+    const bridge = mkBridge();
+    const client = mkClient();
+    const plugin = createMaaPlugin({
+      bridge, client, ownerId: 10001, clientType: 'Bilibili', pollIntervalMs: 5, taskTimeoutMs: 5000,
+    });
+    plugin.handleMessage(ctx('maa 唤醒'));
+    await tick(40);
+    assert.deepEqual(bridge.calls.submit[0], [{ type: 'StartUp', params: { client_type: 'Bilibili' } }]);
+    assert.match(client.sent[0].msg, /启动游戏 已开始/);
+  });
+
   it('公招：默认 4 次，参数走 Recruit select/confirm', async () => {
     const { plugin, bridge, sent } = mkPlugin();
     plugin.handleMessage(ctx('maa 公招'));
     await tick(40);
-    assert.deepEqual(bridge.calls.submit, [['Recruit', { select: [4], confirm: [3, 4], times: 4 }]]);
+    assert.deepEqual(bridge.calls.submit, [[{ type: 'Recruit', params: { select: [4], confirm: [3, 4], times: 4 } }]]);
     assert.match(sent[1].msg, /公招 ×4 完成/);
   });
 
@@ -149,6 +165,45 @@ describe('MAA 指令插件：指令解析与回执', () => {
     plugin.handleMessage(ctx('maa 截图'));
     await tick(20);
     assert.match(sent[0].msg, /截图失败/);
+  });
+
+  it('日常：默认 5 个任务链；带关卡则把 Fight 插到唤醒之后', async () => {
+    const { plugin, bridge } = mkPlugin();
+    plugin.handleMessage(ctx('maa 日常'));
+    await tick(30);
+    assert.deepEqual(bridge.calls.submit[0].map((t) => t.type), ['StartUp', 'Recruit', 'Infrast', 'Mall', 'Award']);
+
+    const b2 = mkBridge();
+    const p2 = createMaaPlugin({ bridge: b2, client: mkClient(), ownerId: 10001, pollIntervalMs: 5 });
+    p2.handleMessage(ctx('maa 日常 CE-6 3'));
+    await tick(30);
+    const tasks = b2.calls.submit[0];
+    assert.deepEqual(tasks.map((t) => t.type), ['StartUp', 'Fight', 'Recruit', 'Infrast', 'Mall', 'Award']);
+    assert.deepEqual(tasks[1].params, { stage: 'CE-6', times: 3, client_type: 'Official' });
+  });
+
+  it('领奖励 / 信用 / 关闭 / 自定义 / 重连', async () => {
+    const { plugin, bridge, sent } = mkPlugin();
+    plugin.handleMessage(ctx('maa 领奖励'));
+    await tick(20);
+    assert.equal(bridge.calls.submit[0][0].type, 'Award');
+
+    plugin.handleMessage(ctx('maa 信用 招聘许可、龙门币'));
+    await tick(20);
+    assert.deepEqual(bridge.calls.submit[1][0].params.buy_first, ['招聘许可', '龙门币']);
+
+    plugin.handleMessage(ctx('maa 关闭'));
+    await tick(20);
+    assert.equal(bridge.calls.submit[2][0].type, 'CloseDown');
+
+    plugin.handleMessage(ctx('maa 自定义 Award Fight'));
+    await tick(20);
+    assert.deepEqual(bridge.calls.submit[3][0], { type: 'Custom', params: { task_names: ['Award', 'Fight'] } });
+
+    plugin.handleMessage(ctx('maa 重连'));
+    await tick(20);
+    assert.equal(bridge.calls.connect, 1);
+    assert.match(sent.at(-1).msg, /已重新连接设备/);
   });
 
   it('停止：调用 bridge.stop 并回执', async () => {

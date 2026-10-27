@@ -169,6 +169,15 @@ export class MaaBridge {
     return this._req('POST', '/task', { type, params });
   }
 
+  /**
+   * 提交任务链（MAA 顺序执行，全部完成才触发 AllTasksCompleted）。
+   * @param {Array<{type: string, params?: Object}>} tasks - 任务数组（如日常一条龙）
+   * @returns {Promise<{job_id: string}>} 任务句柄
+   */
+  submitMany(tasks) {
+    return this._req('POST', '/task', { tasks });
+  }
+
   /** 查询任务 {state, elapsed, drops, chains, error, events} */
   job(jobId) {
     return this._req('GET', `/job/${encodeURIComponent(jobId)}`);

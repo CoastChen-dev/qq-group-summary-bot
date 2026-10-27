@@ -61,6 +61,7 @@ def main():
         return {
             'id': job['id'],
             'type': job['type'],
+            'tasks': job.get('tasks') or [{'type': job['type'], 'params': {}}],
             'state': job['state'],
             'elapsed': round(time.time() - job['started'], 1),
             'drops': job['drops'],
@@ -230,17 +231,27 @@ def main():
             path = urlparse(self.path).path
             if path == '/task':
                 body = self._body()
-                task_type = str(body.get('type') or '').strip()
-                params = body.get('params') or {}
-                if not task_type:
+                # 兼容两种形状：单任务 {type, params}，或任务链 {tasks:[{type, params}, ...]}
+                raw_tasks = body.get('tasks')
+                if raw_tasks is None:
+                    raw_tasks = [{'type': body.get('type'), 'params': body.get('params') or {}}]
+                if not isinstance(raw_tasks, list) or not raw_tasks:
                     return self._send(400, {'ok': False, 'error': 'missing type'})
+                tasks = []
+                for item in raw_tasks:
+                    if not isinstance(item, dict):
+                        return self._send(400, {'ok': False, 'error': 'bad task item'})
+                    task_type = str(item.get('type') or '').strip()
+                    if not task_type:
+                        return self._send(400, {'ok': False, 'error': 'missing type'})
+                    tasks.append({'type': task_type, 'params': item.get('params') or {}})
                 with STATE_LOCK:
                     if state['job'] and state['job']['state'] == 'running':
                         return self._send(409, {'ok': False, 'error': 'busy'})
                 if not connect():
                     return self._send(502, {'ok': False, 'error': state['last_error'] or 'connect failed'})
                 job = {
-                    'id': uuid.uuid4().hex[:12], 'type': task_type, 'params': params,
+                    'id': uuid.uuid4().hex[:12], 'type': tasks[0]['type'], 'tasks': tasks,
                     'started': time.time(), 'state': 'running', 'drops': {}, 'chains': [],
                     'events': [], 'error': '',
                 }
@@ -251,8 +262,10 @@ def main():
                         for old in sorted(state['jobs'], key=lambda k: state['jobs'][k]['started'])[:-20]:
                             state['jobs'].pop(old, None)
                 try:
-                    task_id = asst.append_task(task_type, params)
-                    if task_id < 0 or not asst.start():
+                    for t in tasks:
+                        if asst.append_task(t['type'], t['params']) < 0:
+                            raise RuntimeError(f"append_task 失败：{t['type']}")
+                    if not asst.start():
                         raise RuntimeError('AsstStart 失败')
                 except Exception as e:
                     finish(job, 'error', str(e))

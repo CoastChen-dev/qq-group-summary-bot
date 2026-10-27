@@ -224,6 +224,7 @@ export function createApp(config, overrides = {}) {
         bridge: maaBridge,
         client,
         ownerId: config.owner?.userId ?? 0,
+        clientType: maaCfg.clientType || 'Official',
         pollIntervalMs: Math.max(200, (maaCfg.pollIntervalSeconds ?? 2) * 1000),
       })
     : null;
