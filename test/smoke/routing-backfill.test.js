@@ -36,7 +36,7 @@ const flush = async () => {
 function mkRouting(over = {}) {
   const state = { selfId: 0, ready: false, backfillDone: false, wsConnected: false };
   const seenBy = over.seenByGroup ?? {}; // 各群水位（坑 9：backfill 起点按群读）
-  const calls = { getHistory: 0, historyGids: [], added: [], recorded: [], lastSeenSet: [] };
+  const calls = { getHistory: 0, historyGids: [], seqs: [], added: [], recorded: [], lastSeenSet: [] };
   // 心跳模拟：touchConnected 之后 runtime.json 被写成 now——getLastConnectedAt 也随之为 now。
   // 老代码「先心跳后读水位」会因此恒得离线 0 分钟（2026-10 回归点）。
   let touched = false;
@@ -50,7 +50,17 @@ function mkRouting(over = {}) {
       if (over.loginError) throw new Error('get_login_info 失败');
       return { user_id: over.selfIdResult ?? 424242 };
     },
-    getGroupMsgHistory: async (gid) => { calls.getHistory++; calls.historyGids.push(gid); return { messages: over.messages ?? [] }; },
+    getGroupMsgHistory: async (gid, { messageSeq = 0, count = 50 } = {}) => {
+      calls.getHistory++;
+      calls.historyGids.push(gid);
+      calls.seqs.push(messageSeq);
+      if (!over.history) return { messages: over.messages ?? [] };
+      const all = over.history;
+      // 默认按 message_seq 分页：返回 seq ≤ messageSeq（0 = 最新）的最后一页
+      const end = messageSeq === 0 ? all.length : all.findIndex((m) => m.message_seq === messageSeq) + 1;
+      if (over.ignoreSeq) return { messages: all.slice(-Math.min(count, all.length)) }; // 模拟 API 忽略 message_seq
+      return { messages: all.slice(Math.max(0, end - count), end) };
+    },
     sendGroupMsg: async () => {},
     setMsgEmojiLike: async () => {},
   };
@@ -187,6 +197,33 @@ describe('routing：S1 connect → selfId 回填 + backfill 单次执行', () =>
     await flush();
     assert.equal(calls.getHistory, 0); // 未调 get_group_msg_history
     assert.equal(calls.added.length, 0);
+  });
+
+  it('分页补拉：缺口 > 200 条时按 message_seq 继续翻页，直到翻到 sinceTs', async () => {
+    const now = Math.floor(Date.now() / 1000);
+    // 450 条（seq 1..450，全部落在 72h 窗口内）：单页 200 条装不下
+    const history = Array.from({ length: 450 }, (_, i) => ({
+      message_id: `m${i + 1}`, message_seq: i + 1, time: now - (449 - i), message: '历史',
+    }));
+    const { routing, calls } = mkRouting({ tracked: [7], history });
+    routing.onEvent(connectEvent());
+    await flush();
+    assert.equal(calls.getHistory, 3);        // 200 + 200 + 50 三页
+    assert.equal(calls.added.length, 450);    // 三页全部补回（页间重叠 1 条被 seen 去重）
+    assert.deepEqual(calls.seqs, [0, 251, 52]); // 从最新起翻，用本页最早 seq 继续
+    assert.deepEqual(calls.lastSeenSet, [[7, now]]); // 全部补完才把水位推到最新
+  });
+
+  it('分页补拉：API 忽略 message_seq 时不重复拉同一页、不死循环', async () => {
+    const now = Math.floor(Date.now() / 1000);
+    const history = Array.from({ length: 450 }, (_, i) => ({
+      message_id: `m${i + 1}`, message_seq: i + 1, time: now - (449 - i), message: '历史',
+    }));
+    const { routing, calls } = mkRouting({ tracked: [7], history, ignoreSeq: true });
+    routing.onEvent(connectEvent());
+    await flush();
+    assert.equal(calls.getHistory, 2);      // 第 2 页无推进 → 停
+    assert.equal(calls.added.length, 200);  // 只补到最新一页
   });
 
   it('离线水位在心跳之前读：长离线（3h）启动仍能补拉（2026-10 回归）', async () => {

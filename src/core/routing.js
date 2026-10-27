@@ -93,7 +93,8 @@ export function createRouting(options) {
    * （默认 72h 兜底；2026-09 修复坑 9：原为全局单值——单群拉取失败会把别群水位推高，
    * 该群缺口永远错过，现按群独立、互不钳制）；
    * 群集合 = trackedGroups 非空用之，否则 get_group_list（失败回退磁盘已跟踪群）；
-   * 每群 get_group_msg_history(messageSeq:0, count:200) → 过滤 time<sinceTs 与批内重复 id →
+   * 每群 get_group_msg_history(messageSeq:0, count:200) 起拉，单页不够时按 message_seq 继续往前翻
+   * （最多 5 页 = 1000 条，高风险接口封顶）→ 过滤 time<sinceTs 与批内重复 id →
    * addHistoryMessage（内存/磁盘双去重，仅返回真才算新增）→ analytics.record；
    * 该群有新增才 setLastSeenTs(gid, latest)（只增不减）；单群失败记日志继续。
    *
@@ -131,28 +132,52 @@ export function createRouting(options) {
       if (pulled > 0 && backfillStaggerMs > 0) await new Promise((r) => setTimeout(r, backfillStaggerMs)); // 群间错峰，降低连续拉历史的风控风险
       pulled++;
       try {
-        const resp = await client.getGroupMsgHistory(gid, { messageSeq: 0, count: 200 });
-        const msgs = resp?.messages ?? resp?.data ?? [];
+        // 分页补拉（2026-10）：单页 200 条不够时按 message_seq 继续往前翻，最多 MAX_PAGES 页
+        // （get_group_msg_history 是高风险接口，必须封顶）；翻到 sinceTs 或历史尽头即停。
+        // 旧实现只拉最新 200 条就把水位推到最新——超过 200 条的缺口会永久丢失。
+        const PAGE = 200;
+        const MAX_PAGES = 5;
+        let seq = 0;
+        let prevOldestSeq = Infinity;
+        let pages = 0;
         let added = 0;
         let earliest = 0;
         let latest = 0;
+        let reachedSince = false;
         const seen = new Set();
-        for (const m of Array.isArray(msgs) ? msgs : []) {
-          if (!m) continue;
-          const t = m.time ?? m.msgTime ?? 0;
-          if (t < sinceTs) continue;
-          if (seen.has(m.message_id)) continue;
-          seen.add(m.message_id);
-          const rec = store.addHistoryMessage(gid, m);
-          if (rec) {
-            added++;
-            analytics.record(gid, rec);
+        while (pages < MAX_PAGES) {
+          const resp = await client.getGroupMsgHistory(gid, { messageSeq: seq, count: PAGE });
+          const msgs = resp?.messages ?? resp?.data ?? [];
+          if (!Array.isArray(msgs) || msgs.length === 0) break;
+          pages++;
+          let oldestSeq = Infinity;
+          for (const m of msgs) {
+            if (!m) continue;
+            const t = m.time ?? m.msgTime ?? 0;
+            const s = Number(m.message_seq ?? m.real_seq ?? 0);
+            if (s > 0 && s < oldestSeq) oldestSeq = s;
+            if (t < sinceTs) { reachedSince = true; continue; }
+            if (seen.has(m.message_id)) continue;
+            seen.add(m.message_id);
+            const rec = store.addHistoryMessage(gid, m);
+            if (rec) {
+              added++;
+              analytics.record(gid, rec);
+            }
+            if (!earliest || t < earliest) earliest = t;
+            if (t > latest) latest = t;
           }
-          if (!earliest || t < earliest) earliest = t;
-          if (t > latest) latest = t;
+          if (reachedSince || msgs.length < PAGE) break;
+          // 翻页推进不了（缺 message_seq / API 忽略它）就停，避免死循环重复拉同一页
+          if (!Number.isFinite(oldestSeq) || oldestSeq >= prevOldestSeq) break;
+          prevOldestSeq = oldestSeq;
+          seq = oldestSeq;
+          if (backfillStaggerMs > 0) await new Promise((r) => setTimeout(r, backfillStaggerMs)); // 页间错峰
         }
         if (added > 0) store.setLastSeenTs(gid, latest);
-        log(`[backfill] 群 ${gid} 自 ${fmtFull(new Date(sinceTs * 1000))} 起补偿 ${added} 条离线消息${added ? `（最早 ${fmtFull(new Date(earliest * 1000))}）` : ''}`);
+        const span = added ? `（最早 ${fmtFull(new Date(earliest * 1000))}）` : '';
+        const cap = pages >= MAX_PAGES && !reachedSince ? `；已到 ${MAX_PAGES} 页上限，更早的缺口未覆盖` : '';
+        log(`[backfill] 群 ${gid} 自 ${fmtFull(new Date(sinceTs * 1000))} 起补偿 ${added} 条离线消息${span}（${pages} 页${cap}）`);
       } catch (e) {
         err(`[backfill] 群 ${gid} 拉取失败:`, e.message);
       }

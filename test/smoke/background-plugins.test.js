@@ -131,6 +131,41 @@ describe('refresh 插件（手动刷新 + 自动定时器，原 S11/§6.3）', (
     assert.ok(!sent.some((s) => s.msg.includes('播报'))); // broadcast=false 无播报
   });
 
+  it('并发触发单飞：两个群同时刷新只下载一次，各自收到结果回执', async () => {
+    const sent = [];
+    let release;
+    let downloads = 0;
+    const plugin = createRefreshPlugin({
+      arkdb: { snapshotHighOps: () => [], snapshotGachaPools: () => [], reload: () => {} },
+      refresher: {
+        refresh: () => {
+          downloads++;
+          return new Promise((resolve) => {
+            release = () => resolve({ updated: [], unchanged: ['干员表'], failed: [] });
+          });
+        },
+      },
+      cache: { deleteByPrefix: () => 0 },
+      client: {
+        sendGroupMsg: async (gid, msg) => { sent.push({ gid, msg }); },
+        sendGroupMsgAt: async (gid, uid, msg) => { sent.push({ gid, uid, msg }); },
+      },
+      store: { trackedGroupIds: () => [] },
+      trackedGroups: () => [],
+      broadcast: false,
+      schedule: {},
+    });
+    const p1 = plugin.api.refresh(111, 9);
+    const p2 = plugin.api.refresh(222, 9);
+    assert.equal(downloads, 1); // 第二次触发不再下载，挂到同一个任务上
+    release();
+    const [m1, m2] = await Promise.all([p1, p2]);
+    assert.equal(downloads, 1);
+    assert.equal(m1, m2);
+    assert.deepEqual(sent.map((s) => s.gid), [111, 222]); // 两个群各收到一条结果回执
+    assert.ok(sent.every((s) => s.msg.startsWith('【数据更新】')));
+  });
+
   it('数据有更新 → 恰清一次 q:* 知识检索缓存（坑 3：deleteByPrefix 只收 q:）', async () => {
     const { reg, calls } = mkRefresh();
     reg.dispatch({ groupId: 1, text: '刷新数据' });

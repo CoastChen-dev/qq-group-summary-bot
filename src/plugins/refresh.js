@@ -44,6 +44,38 @@ export function createRefreshPlugin(deps) {
   // 定时器句柄（hooks.stop 清理用；旧实现退出不清理、依赖 process.exit，插件化后补上）
   let firstTimer = null;
   let repeatTimer = null;
+  // 单飞：同一时刻只允许一个刷新任务（手动指令 / 24h 定时器 / WebUI 三触发源共用）
+  let runningPromise = null;
+
+  /**
+   * 结果回执：群指令触发时向该群回「【数据更新】…」（真 @ 提问者）；发送失败只记日志
+   * @returns {Promise<void>}
+   */
+  async function sendResult(notifyGroupId, atUserId, msg) {
+    if (!notifyGroupId) return;
+    try {
+      if (atUserId) await client.sendGroupMsgAt(notifyGroupId, atUserId, msg);
+      else await client.sendGroupMsg(notifyGroupId, msg);
+    } catch (e) {
+      err('[refresh] 通知发送失败:', e.message);
+    }
+  }
+
+  /**
+   * 刷新入口（对外/定时器/WebUI 共用）：单飞——已有任务在跑时不重复下载，等它结束复用同一结果。
+   * 触发者各有各的回执（同群重复触发也会各收到一条结果，不会重复拉数据）。
+   * @returns {Promise<string>} 「【数据更新】…」结果文本
+   */
+  async function refresh(notifyGroupId = null, atUserId = null) {
+    if (runningPromise) {
+      log('[refresh] 已有更新任务在跑，等待结果复用（不重复下载）');
+      const msg = await runningPromise;
+      await sendResult(notifyGroupId, atUserId, msg);
+      return msg;
+    }
+    runningPromise = runRefresh(notifyGroupId, atUserId).finally(() => { runningPromise = null; });
+    return runningPromise;
+  }
 
   /**
    * 数据自动/手动刷新编排（§6.3 单一 runner，三个触发源共用）。
@@ -54,7 +86,7 @@ export function createRefreshPlugin(deps) {
    * 副作用：联网下载写盘 data/ark/（原子写入，成功后清掉历史 .bak）、arkdb 内存热重载、
    * 更新时清 q:* 知识检索缓存（坑 3）、可能群发播报；发送失败吞掉只记日志
    */
-  async function refresh(notifyGroupId = null, atUserId = null) {
+  async function runRefresh(notifyGroupId = null, atUserId = null) {
     log('[refresh] 开始更新本地数据...');
 
     // 快照旧数据（用于新增播报对比；走公开快照 API，不再直读 characters/_isOperator/gachaPools）
@@ -96,21 +128,18 @@ export function createRefreshPlugin(deps) {
     }
 
     const msg = `【数据更新】\n成功：${updated.length ? updated.join('、') : '无'}\n未变化：${unchanged.length ? unchanged.join('、') : '无'}\n${failed.length ? '失败：' + failed.join('、') : '全部成功'}`;
-    if (notifyGroupId) {
-      const sendMsg = atUserId
-        ? client.sendGroupMsgAt(notifyGroupId, atUserId, msg)
-        : client.sendGroupMsg(notifyGroupId, msg);
-      sendMsg.catch((e) => err(`[refresh] 通知发送失败:`, e.message));
-      if (announce && broadcast) {
+    await sendResult(notifyGroupId, atUserId, msg);
+    if (announce && broadcast) {
+      if (notifyGroupId) {
         client.sendGroupMsg(notifyGroupId, announce).catch(() => {});
+      } else {
+        // 自动更新时向所有监控群播报新增内容（默认关闭，需 announce: true 显式开启）
+        const targets = trackedGroups().length ? trackedGroups() : store.trackedGroupIds();
+        for (const gid of targets) {
+          client.sendGroupMsg(gid, announce).catch(() => {});
+        }
+        log('[refresh] 已向群聊播报新增内容');
       }
-    } else if (announce && broadcast) {
-      // 自动更新时向所有监控群播报新增内容（默认关闭，需 announce: true 显式开启）
-      const targets = trackedGroups().length ? trackedGroups() : store.trackedGroupIds();
-      for (const gid of targets) {
-        client.sendGroupMsg(gid, announce).catch(() => {});
-      }
-      log('[refresh] 已向群聊播报新增内容');
     }
     return msg;
   }
