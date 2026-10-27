@@ -63,6 +63,7 @@ function mkPlugin(opts = {}) {
   const client = opts.client || mkClient();
   const plugin = createMaaPlugin({
     bridge, client, ownerId: opts.ownerId ?? 10001,
+    allowGacha: opts.allowGacha, gachaConfirmMs: opts.gachaConfirmMs,
     pollIntervalMs: 5, taskTimeoutMs: 5000,
   });
   return { plugin, bridge, client, sent: client.sent };
@@ -204,6 +205,45 @@ describe('MAA 指令插件：指令解析与回执', () => {
     await tick(20);
     assert.equal(bridge.calls.connect, 1);
     assert.match(sent.at(-1).msg, /已重新连接设备/);
+  });
+
+  it('真抽卡默认关闭：allowGacha=false 时直接拒绝，不提交', () => {
+    const { plugin, bridge } = mkPlugin();
+    const r = plugin.handleMessage(ctx('maa 抽卡十连'));
+    assert.match(r, /真抽卡未启用/);
+    assert.equal(bridge.calls.submit.length, 0);
+  });
+
+  it('真抽卡：先要确认，确认后才提交 Custom 链，结束后补结果截图', async () => {
+    const png = Buffer.from([0x89, 0x50]);
+    const { plugin, bridge, sent } = mkPlugin({ allowGacha: true, bridge: mkBridge({ screenshot: png }) });
+    const prompt = plugin.handleMessage(ctx('maa 抽卡十连'));
+    assert.match(prompt, /确认要执行「真抽卡·十连」/);
+    assert.match(prompt, /6000 合成玉/);
+    assert.equal(bridge.calls.submit.length, 0); // 未确认前不动手
+
+    assert.equal(plugin.handleMessage(ctx('maa 确认')), true);
+    await tick(60);
+    assert.deepEqual(bridge.calls.submit[0], [
+      { type: 'StartUp', params: { client_type: 'Official' } },
+      { type: 'Custom', params: { task_names: ['GachaTenTimes'] } },
+    ]);
+    assert.match(sent[0].msg, /真抽卡·十连 已开始/);
+    assert.match(sent[1].msg, /真抽卡·十连 完成/);
+    assert.equal(sent[2].png, png); // 结果截图
+  });
+
+  it('抽卡取消与过期：取消后不能再确认；超时确认报过期', async () => {
+    const p = mkPlugin({ allowGacha: true, gachaConfirmMs: 60000 });
+    assert.match(p.plugin.handleMessage(ctx('maa 抽卡单抽')), /600 合成玉/);
+    assert.match(p.plugin.handleMessage(ctx('maa 取消')), /已取消/);
+    assert.match(p.plugin.handleMessage(ctx('maa 确认')), /没有待确认/);
+
+    const q = mkPlugin({ allowGacha: true, gachaConfirmMs: 1 });
+    q.plugin.handleMessage(ctx('maa 抽卡单抽'));
+    await tick(10);
+    assert.match(q.plugin.handleMessage(ctx('maa 确认')), /已过期/);
+    assert.equal(q.bridge.calls.submit.length, 0);
   });
 
   it('停止：调用 bridge.stop 并回执', async () => {

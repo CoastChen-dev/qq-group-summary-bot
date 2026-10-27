@@ -62,6 +62,8 @@
 | `maa.adbPath` / `maa.adbAddress` | string | `adb.exe` / `127.0.0.1:5555` | worker.py → MaaCore | adb 可执行文件与设备地址（MuMu 常见 `127.0.0.1:16384`） |
 | `maa.connectConfig` | string | `General` | worker.py → MaaCore | MAA 连接配置名（如 `MuMuEmulator12`） |
 | `maa.clientType` | string | `Official` | maa 插件 → StartUp/Fight | 客户端类型：`Official` / `Bilibili` / `txwy` / `YoStarEN` / `YoStarJP` / `YoStarKR`（决定启动哪个游戏包） |
+| `maa.allowGacha` | boolean | `false` | maa 插件 | 真抽卡开关（默认关；开启后 `maa 抽卡十连/单抽` 仍需二次确认，会消耗真实货币） |
+| `maa.gachaConfirmSeconds` | number | `60` | maa 插件 | 抽卡确认有效期（秒），过期需重新发起 |
 | `maa.workerPort` | number | `0` | MaaBridge | worker 端口（0 = 系统分配） |
 | `maa.taskTimeoutMinutes` | number | `60` | worker.py | 单任务超时后自动停止 |
 | `maa.pollIntervalSeconds` | number | `2` | maa 插件 | 结果轮询间隔（秒） |

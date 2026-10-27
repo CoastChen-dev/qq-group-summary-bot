@@ -32,6 +32,8 @@ const HELP = [
   'maa 领奖励 —— 领取日常奖励',
   'maa 信用 [商品…] —— 领信用并按优先级购物（默认招聘许可、龙门币）',
   'maa 截图 —— 把当前模拟器画面发到群里',
+  'maa 抽卡十连 / maa 抽卡单抽 —— 真抽卡（需 allowGacha；会先要二次确认）',
+  'maa 确认 / maa 取消 —— 确认或放弃待执行的抽卡',
   'maa 自定义 <任务链…> —— 执行 MAA 任务链（如 maa 自定义 Award）',
   'maa 重连 —— 重新连接模拟器',
   'maa 关闭 —— 关闭游戏',
@@ -40,6 +42,12 @@ const HELP = [
 
 const DAILY_FACILITY = ['Mfg', 'Trade', 'Control', 'Power', 'Reception', 'Office', 'Dorm'];
 const MALL_DEFAULT_BUY = ['招聘许可', '龙门币'];
+// 真抽卡：MAA 没有公开的 Gacha 任务类型，这里走 resources/tasks/tasks.json 里的任务链（Custom）。
+// 会消耗真实货币（合成玉/源石/寻访凭证），因此默认关闭 + 二次确认。
+const GACHA = {
+  十连: { chain: 'GachaTenTimes', cost: '6000 合成玉 / 10 张寻访凭证（以游戏内为准）' },
+  单抽: { chain: 'GachaOnce', cost: '600 合成玉 / 1 张寻访凭证（以游戏内为准）' },
+};
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -56,12 +64,19 @@ function fmtElapsed(ms) {
  * @param {Object} deps.bridge - MaaBridge 实例
  * @param {Object} deps.client - NapCatClient
  * @param {string|number} deps.ownerId - 主人 QQ（空 = 禁用）
+ * @param {string} [deps.clientType='Official'] - 客户端类型（StartUp/Fight 用）
  * @param {number} [deps.pollIntervalMs=2000] - 任务轮询间隔
  * @param {number} [deps.taskTimeoutMs=5700000] - 插件侧等待上限（默认 95 分钟）
+ * @param {boolean} [deps.allowGacha=false] - 是否允许真抽卡（默认关，需显式开启）
+ * @param {number} [deps.gachaConfirmMs=60000] - 抽卡确认有效期
  * @returns {Object} 注册表可直接 register 的插件描述符
  */
-export function createMaaPlugin({ bridge, client, ownerId, clientType = 'Official', pollIntervalMs = 2000, taskTimeoutMs = 95 * 60 * 1000 } = {}) {
+export function createMaaPlugin({
+  bridge, client, ownerId, clientType = 'Official', pollIntervalMs = 2000,
+  taskTimeoutMs = 95 * 60 * 1000, allowGacha = false, gachaConfirmMs = 60000,
+} = {}) {
   let watching = null; // 当前轮询 promise（仅用于防重复提示，不阻塞分发）
+  const pendingGacha = new Map(); // groupId → { chain, label, cost, expiresAt }
 
   const send = (ctx, text, at = false) => {
     if (!client) return;
@@ -102,6 +117,17 @@ export function createMaaPlugin({ bridge, client, ownerId, clientType = 'Officia
       }
       if (job.state === 'running') continue;
       send(ctx, summaryText(label, job));
+      // 真抽卡结束后补一张结果截图（gacha 没有掉落回调，结果只能看画面）
+      if (job.state === 'done' && label.startsWith('真抽卡')) {
+        try {
+          const png = await bridge.screenshot();
+          if (client && typeof client.sendGroupImage === 'function') {
+            await client.sendGroupImage(ctx.groupId, png, '【MAA 抽卡结果】');
+          }
+        } catch (e) {
+          log(`[maa] 抽卡结果截图失败: ${e.message}`);
+        }
+      }
       log(`[maa] ${label} 结束：${job.state}`);
       watching = null;
       return;
@@ -202,6 +228,34 @@ export function createMaaPlugin({ bridge, client, ownerId, clientType = 'Officia
     if (/^(公招|招募|recruit)$/i.test(head)) {
       const times = Math.min(Math.max(parseInt(rest[0] || '4', 10) || 4, 1), 99);
       return submit(ctx, 'Recruit', { select: [4], confirm: [3, 4], times }, `公招 ×${times}`);
+    }
+    if (/^抽卡(十连|单抽)$/.test(head)) {
+      if (!allowGacha) return '真抽卡未启用（把 config.maa.allowGacha 设为 true 才可用）';
+      const kind = head.replace('抽卡', '');
+      const g = GACHA[kind];
+      pendingGacha.set(String(ctx.groupId), {
+        chain: g.chain, label: kind, cost: g.cost, expiresAt: Date.now() + gachaConfirmMs,
+      });
+      return [
+        `【MAA】确认要执行「真抽卡·${kind}」吗？`,
+        `消耗：${g.cost}`,
+        `${Math.round(gachaConfirmMs / 1000)} 秒内回复「maa 确认」执行，「maa 取消」放弃。`,
+      ].join('\n');
+    }
+    if (/^(确认|确认抽卡|confirm)$/i.test(head)) {
+      const key = String(ctx.groupId);
+      const p = pendingGacha.get(key);
+      if (!p) return '没有待确认的抽卡（先发「maa 抽卡十连」或「maa 抽卡单抽」）';
+      pendingGacha.delete(key);
+      if (Date.now() > p.expiresAt) return '抽卡确认已过期，请重新发起';
+      // 先 StartUp 确保在主界面，再执行抽卡任务链（从任何界面发起都稳）
+      return submitMany(ctx, [
+        { type: 'StartUp', params: { client_type: clientType } },
+        { type: 'Custom', params: { task_names: [p.chain] } },
+      ], `真抽卡·${p.label}`);
+    }
+    if (/^(取消|cancel)$/i.test(head)) {
+      return pendingGacha.delete(String(ctx.groupId)) ? '已取消待确认的抽卡' : '没有待确认的抽卡';
     }
     if (/^(基建|infrast)$/i.test(head)) {
       return submit(ctx, 'Infrast', {

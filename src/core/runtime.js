@@ -225,6 +225,8 @@ export function createApp(config, overrides = {}) {
         client,
         ownerId: config.owner?.userId ?? 0,
         clientType: maaCfg.clientType || 'Official',
+        allowGacha: maaCfg.allowGacha === true,
+        gachaConfirmMs: Math.max(5000, (maaCfg.gachaConfirmSeconds ?? 60) * 1000),
         pollIntervalMs: Math.max(200, (maaCfg.pollIntervalSeconds ?? 2) * 1000),
       })
     : null;

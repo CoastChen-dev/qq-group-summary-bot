@@ -46,8 +46,9 @@
 
 把 [MAA](https://github.com/MaaAssistantArknights/MaaAssistantArknights) 接进群：主人在群里下指令，bot 通过本机 Python 桥驱动 MaaCore，刷完把结果与掉落发回群。
 
-- 指令：`maa 状态` / `maa 唤醒` / `maa 日常 [关卡]` / `maa 刷图 CE-6 5` / `maa 公招 4` / `maa 基建` / `maa 领奖励` / `maa 信用 [商品]` / `maa 截图` / `maa 自定义 <任务链>` / `maa 重连` / `maa 关闭` / `maa 停止`
+- 指令：`maa 状态` / `maa 唤醒` / `maa 日常 [关卡]` / `maa 刷图 CE-6 5` / `maa 公招 4` / `maa 基建` / `maa 领奖励` / `maa 信用 [商品]` / `maa 截图` / `maa 抽卡十连` / `maa 自定义 <任务链>` / `maa 重连` / `maa 关闭` / `maa 停止`
 - 一条龙：`maa 日常 CE-6 5` = 唤醒 → 刷图 → 公招 → 基建 → 信用 → 奖励（MAA 任务链一次提交，全部完成才回报）
+- **真抽卡**（`maa.allowGacha`，默认关）：`maa 抽卡十连` / `maa 抽卡单抽` 先回确认提示，60s 内再发 `maa 确认` 才执行，结束后补结果截图；会消耗真实合成玉/寻访凭证，请自行确认账号状态
 - 前置：本机装 MAA + 模拟器（adb 可达），`config.maa.enabled: true` 并填好 `maaPath` / `adbPath` / `adbAddress`
 - 边界：同一时刻只跑一个任务；`maa.*` 默认只有主人（`owner.userId`）可用；不抢占 MAA GUI 的控制权
 
@@ -69,7 +70,7 @@
 | 抽卡 | `卡池`、`单抽 [池]`、`十连 [池]`、`N 连 [池]`（中文数字也可，上限 1000）、`抽卡记录 [N]`、`谁最欧` |
 | 统计 | `活跃榜 [N天]`、`群统计` |
 | 平台状态 | `#status`、`/status`（返回 NapCat 账号/版本/协议/在线状态/WS/耗时） |
-| 游戏控制 | `maa 状态`、`maa 唤醒`、`maa 日常 [关卡] [次数]`、`maa 刷图 CE-6 5`、`maa 公招 [次数]`、`maa 基建`、`maa 领奖励`、`maa 信用 [商品]`、`maa 截图`、`maa 自定义 <任务链>`、`maa 重连`、`maa 关闭`、`maa 停止`（仅主人，需 `maa.enabled`） |
+| 游戏控制 | `maa 状态`、`maa 唤醒`、`maa 日常 [关卡] [次数]`、`maa 刷图 CE-6 5`、`maa 公招 [次数]`、`maa 基建`、`maa 领奖励`、`maa 信用 [商品]`、`maa 截图`、`maa 抽卡十连`/`maa 抽卡单抽` + `maa 确认`、`maa 自定义 <任务链>`、`maa 重连`、`maa 关闭`、`maa 停止`（仅主人，需 `maa.enabled`） |
 | 数据 | `刷新数据` |
 
 其余内容走 AI 群聊（LLM 自主回复，可调用工具）。
