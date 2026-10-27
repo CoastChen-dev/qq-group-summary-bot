@@ -91,6 +91,17 @@
     "port": 5210,
     "token": ""
   },
+  "maa": {
+    "enabled": false,
+    "maaPath": "D:\\Game\\MAA",
+    "python": "python",
+    "adbPath": "D:\\Program Files\\Netease\\MuMu\\nx_main\\adb.exe",
+    "adbAddress": "127.0.0.1:16384",
+    "connectConfig": "General",
+    "workerPort": 0,
+    "taskTimeoutMinutes": 60,
+    "pollIntervalSeconds": 2
+  },
   "filter": {
     "enabled": true
   },

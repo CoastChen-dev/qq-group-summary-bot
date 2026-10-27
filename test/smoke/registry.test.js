@@ -14,7 +14,7 @@ after(silenceLog());
 
 describe('PRIORITY 优先级带', () => {
   it('常量表编码原路由链次序（数值越大越先分发）', () => {
-    const order = ['summary', 'refresh', 'memory', 'lingo', 'ark', 'gacha', 'stats', 'status', 'chat'];
+    const order = ['summary', 'refresh', 'memory', 'lingo', 'ark', 'gacha', 'stats', 'maa', 'status', 'chat'];
     for (let i = 0; i < order.length - 1; i++) {
       assert.ok(PRIORITY[order[i]] > PRIORITY[order[i + 1]], `${order[i]} > ${order[i + 1]}`);
     }

@@ -23,6 +23,7 @@ export const PRIORITY = Object.freeze({
   ark: 600,     // 干员/藏品/生日查询（规则 5-8）
   gacha: 500,   // 卡池/抽卡/抽卡记录（规则 9-11，含顺序敏感正则）
   stats: 400,   // 活跃榜/群统计（规则 12-14）
+  maa: 380,     // MAA 游戏控制（maa …，仅主人）
   status: 350,  // NapCat 平台状态（#status / /status）
   chat: 300,    // LLM 兜底（S13）
 });

@@ -42,11 +42,19 @@
 - **联网搜索**：配置 `webSearch.apiKey`（智谱/博查）后取代百科源，检索更实时、少依赖萌娘/维基
 - **群友教词典**：`学习 词=释义` / `忘记 词` / `查词 词` / `词典`
 
+### 游戏控制（MAA，可选，仅主人）
+
+把 [MAA](https://github.com/MaaAssistantArknights/MaaAssistantArknights) 接进群：主人在群里下指令，bot 通过本机 Python 桥驱动 MaaCore，刷完把结果与掉落发回群。
+
+- 指令：`maa 状态` / `maa 唤醒` / `maa 刷图 CE-6 5` / `maa 公招 4` / `maa 基建` / `maa 停止`
+- 前置：本机装 MAA + 模拟器（adb 可达），`config.maa.enabled: true` 并填好 `maaPath` / `adbPath` / `adbAddress`
+- 边界：同一时刻只跑一个任务；`maa.*` 默认只有主人（`owner.userId`）可用；不抢占 MAA GUI 的控制权
+
 ### 管理与工程
 
 - **Web 管理面板**（`http://127.0.0.1:5210`）：运行状态、词典增删、用户记忆查看/删除、数据刷新、配置查看（密钥脱敏）
 - **SQLite 分析层**：消息实时入库，支持 `活跃榜 [N天]` / `群统计` / 抽卡记录
-- **插件架构**：core（装配/路由/平台服务/知识单例）+ plugins（6 指令 + 5 功能插件），268 项测试（`npm test`，纯本地零网络）
+- **插件架构**：core（装配/路由/平台服务/知识单例）+ plugins（7 指令 + 5 功能插件），284 项测试（`npm test`，纯本地零网络）
 - **风控降险内置**：backfill 节流、重连退避、贴表情冷却、出站过滤（见下）
 
 ## 指令一览
@@ -60,6 +68,7 @@
 | 抽卡 | `卡池`、`单抽 [池]`、`十连 [池]`、`N 连 [池]`（中文数字也可，上限 1000）、`抽卡记录 [N]`、`谁最欧` |
 | 统计 | `活跃榜 [N天]`、`群统计` |
 | 平台状态 | `#status`、`/status`（返回 NapCat 账号/版本/协议/在线状态/WS/耗时） |
+| 游戏控制 | `maa 状态`、`maa 唤醒`、`maa 刷图 CE-6 5`、`maa 公招 [次数]`、`maa 基建`、`maa 停止`（仅主人，需 `maa.enabled`） |
 | 数据 | `刷新数据` |
 
 其余内容走 AI 群聊（LLM 自主回复，可调用工具）。
@@ -134,13 +143,15 @@ src/
     registry.js   插件注册表（priority 分发带 / hooks 生命周期）
     routing.js    S1–S13 消息路由判定链 + 离线补偿（backfill）
     platform/     napcat.js store.js summarizer.js scheduler.js analytics.js refresher.js
-                  usermem.js emoji.js filter.js logger.js http.js text.js lifecycle.js
+                  usermem.js emoji.js filter.js logger.js http.js text.js lifecycle.js maa.js
     knowledge/    lingo.js arkdb.js cache.js wiki.js moegirl.js wikipedia.js websearch.js
   plugins/      功能插件（互不 import；服务经 createApp 注入）
     memory.js lingo.js ark.js gacha.js stats.js status.js   指令插件（带 750–350）
     summary.js refresh.js report.js              后台流程（总结/数据更新/日报）
     chat.js    AI 群聊 ChatBrain + 工具表 createChatTools + 兜底分发
     webui.js   Web 管理面板
+    maa.js     MAA 游戏控制指令（带 380，仅主人）
+tools/maa_bridge/worker.py   MAA 桥（Python + MaaCore，本机 HTTP）
 test/           node:test：baseline/（行为基线）+ smoke/（接线与全链冒烟）
 prompts/        人格提示词（chat-system.md，她可自我编辑、即改即生效；缺失回退代码内置默认）
 config.example.json / config.json   配置模板 / 实配（密钥，gitignored）

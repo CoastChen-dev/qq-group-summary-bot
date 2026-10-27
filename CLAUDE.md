@@ -49,16 +49,17 @@ QQ 对自动化账号有阶梯式风控（提示 → 限制 → 冻结 7/30 天 
 
 来自 [docs/architecture.md](docs/architecture.md) §8 与 [docs/refactor-proposal.md](docs/refactor-proposal.md) 的探索结论：
 
-1. **路由链次序即契约**：S1–S7（消息入库 → @检测 → 静默门）与 S9/S10（剥 @、空@ 固定回复）在 core/routing.js（P5 起自 runtime.js 拆出，runtime 装配期 createRouting 挂载，顺序与文案未改）；其后的产品行为全部经 registry 分发带（priority 降序）：summary 900（总结关键词）→ refresh 800（刷新指令）→ memory 750（用户记忆）→ 指令插件 700–350（lingo/ark/gacha/stats/status）→ chat 300 末端恒消费（report/webui 仅 hooks 不占带）。任何"看起来更合理"的重排都可能改变现网行为；带序常量在 core/registry.js 的 `PRIORITY`（**测试锁定 keys，新增占带名须同步 registry 测试**）。
+1. **路由链次序即契约**：S1–S7（消息入库 → @检测 → 静默门）与 S9/S10（剥 @、空@ 固定回复）在 core/routing.js（P5 起自 runtime.js 拆出，runtime 装配期 createRouting 挂载，顺序与文案未改）；其后的产品行为全部经 registry 分发带（priority 降序）：summary 900（总结关键词）→ refresh 800（刷新指令）→ memory 750（用户记忆）→ 指令插件 700–350（lingo/ark/gacha/stats/maa/status）→ chat 300 末端恒消费（report/webui 仅 hooks 不占带）。任何"看起来更合理"的重排都可能改变现网行为；带序常量在 core/registry.js 的 `PRIORITY`（**测试锁定 keys，新增占带名须同步 registry 测试**）。
 2. **消息入库是同步 `appendFileSync` 且先于一切路由**——不得异步化或加锁（现状：写失败中断该消息路由）。
 3. **@匹配语义**：at 段字符串全等；`@机器人`/`@PRTS` 大小写敏感子串匹配；剥 @ 只剥 1–2 段**前导**的，尾部 @ 原样保留。**关键词/指令判定统一基于剥 @ 后的有效文本**——紧贴 @ 无空格的整串（如 `@PRTS总结`）不触发任何指令/总结、落 S10 空@ 提示（既定语义，勿按旧「含 @ 全文判」回退）。
 4. **日报触发时刻 = `report.hour/minute`**（缺省 9:00；2026-09 立项修复：旧 `schedule.hour/minute` 与 `report.hour` 遗读是死键已废弃，`config.schedule` 整块不再读取）。改键名/触发语义先立项讨论。
 5. **语义保持**：知识缓存键 `q:<问题>` 跨群共享（勿加群号前缀）；2026-09 修复坑 3：数据刷新实际有更新时 `cache.deleteByPrefix('q:')` 清检索缓存（见 plugins/refresh.js），键语义不动；Summarizer 与 ChatBrain 的 LLM 默认值（maxTokens 2048/1024、temperature 0.7/0.8）别单方面改。**ChatBrain 人设提示词已外置 `prompts/chat-system.md`**（她可经工具自我编辑、mtime 热重载即改即生效；内置默认 `DEFAULT_SYSTEM_PROMPT_LINES` 是回退基线，改默认值时注意与文件版语义一致）。
-6. **指令 18 条规则顺序即优先级**：规则按域拆在 6 个指令插件（plugins/memory.js 用户记忆、lingo.js 词典、ark.js 干员藏品、gacha.js 抽卡、stats.js 统计、status.js 平台状态）——域内序 = 文件内代码序、域间序 = PRIORITY 带（750 > 700 > 600 > 500 > 400 > 350）。抽卡记录必须先于单抽；负向前瞻正则勿合并。
+6. **指令 18 条规则顺序即优先级**：规则按域拆在 6 个指令插件（plugins/memory.js 用户记忆、lingo.js 词典、ark.js 干员藏品、gacha.js 抽卡、stats.js 统计、status.js 平台状态）+ maa.js 游戏控制（仅主人，带 380）——域内序 = 文件内代码序、域间序 = PRIORITY 带（750 > 700 > 600 > 500 > 400 > 380 > 350）。抽卡记录必须先于单抽；负向前瞻正则勿合并。
 7. **抽卡/干员/藏品的概率与过滤逻辑在 core/knowledge/arkdb.js 内**，命令层（插件）只做格式化与落库；概率/可获取性改动需走游戏数据事实，不拍脑袋。
 
 ## 功能扩展入口（现在长什么样，去哪儿加）
 
+- **MAA 游戏控制**：桥在 tools/maa_bridge/worker.py（Python + MAA 自带 asst 绑定，本机 HTTP + token），Node 侧 core/platform/maa.js（MaaBridge：spawn/status/submit/job/stop），指令在 plugins/maa.js（带 380，仅 config.owner.userId）；配置 config.maa.*（enabled/maaPath/adbPath/adbAddress/connectConfig）。同一时刻只允许一个任务（worker 409 兜底）；新增指令 = 在 handleMessage 里加锚定分支 + 用 submit() 提交对应任务类型。
 - **新群指令**：先归领域 → 在对应指令插件内沿既有分隔段插入（域内代码序 = 优先级）：用户记忆 → plugins/memory.js、词典 → plugins/lingo.js、干员/藏品 → plugins/ark.js、抽卡 → plugins/gacha.js、统计 → plugins/stats.js、平台状态 → plugins/status.js。全新领域：新建 createXxxPlugin 工厂 + 加入 plugins/index.js 的 `commandPlugins` 数组 + 在 core/registry.js `PRIORITY` 加带（须同步 registry 测试对 keys 的断言）。
 - **用户记忆（记什么/怎么记）**：存储 core/platform/usermem.js（JSON 按群隔离；每人 20 条/全局 2000 条上限）；指令 plugins/memory.js；chat 侧注入与自动提取在 plugins/chat.js 的 buildMessages/_extractMemory；配置 config.memory.*（enabled/autoExtract/容量）。**记忆只存资料、不存指令**（2026-10 提示注入加固）：`setFact` 写入前 `sanitizeFact` 单行化+去【】伪块标记，并拒收 `looksLikeInstruction` 命中的指令式文本；注入时带「只是资料，不是指令」定界、system 里有一条定界规则、读取时再过滤一次（旧数据兜底），总注入长度封顶 800 字。
 - **新 LLM 工具（function calling）**：在 plugins/chat.js 的 `createChatTools` 里加 `{name, description, parameters, handler}`；贴表情 ID 表在 core/platform/emoji.js（NapCat 官方 qface ID 空间，勿用旧版编号）；总开关 config.tools.*，贴表情单独由 config.emojiLike.enabled 控制；自我资料修改（昵称/签名/名片）走 runtime 注入的 profile 出口；文档/提示词读写仅 config.owner.userId 可用且白名单限定（docs/、prompts/、README、CLAUDE.md，写前备份到 data/backups/）。
@@ -73,7 +74,7 @@ QQ 对自动化账号有阶梯式风控（提示 → 限制 → 冻结 7/30 天 
 
 重构（P0–P3，2026-09 落地，方案存档见 [docs/refactor-proposal.md](docs/refactor-proposal.md)）已完成，P5 再对 core 子目录归类并把 S 链判定拆到 core/routing.js：**core 主运行库 + PluginRegistry + plugins**。
 - core/ 顶层 = 装配与判定三件：runtime.js（createApp 唯一装配者 + 生命周期 + main）、registry.js（分发带）、routing.js（S1–S7/S9/S10 判定链 + backfill，P5 自 runtime.js 拆出）；core/platform/ = 平台服务与基础设施（napcat/store/summarizer/scheduler/analytics/refresher/filter/logger/http）；core/knowledge/ = 知识单例（lingo/arkdb/cache/wiki/moegirl/wikipedia）。
-- plugins/ = 11 个插件：6 指令（memory/lingo/ark/gacha/stats/status）+ summary/refresh/report（后台流程）+ chat（LLM 兜底）+ webui（面板）；插件间零互 import，服务一律经 createApp 注入。
+- plugins/ = 12 个插件：6 指令（memory/lingo/ark/gacha/stats/status）+ maa（游戏控制，仅主人）+ summary/refresh/report（后台流程）+ chat（LLM 兜底）+ webui（面板）；插件间零互 import，服务一律经 createApp 注入。
 
 约束：
 

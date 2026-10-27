@@ -56,6 +56,14 @@
 | `webui.enabled` | boolean | `true` | webui 插件（hooks.start） | Web 面板开关 |
 | `webui.host` / `webui.port` | string/number | `127.0.0.1` / `5210` | webui 插件 | listen 地址；host 留 127.0.0.1 仅本机可访问 |
 | `webui.token` | string | `''` | webui 插件 | 面板口令；空 = 全开放；非空时要求 `Authorization: Bearer` 头或 `?token=` |
+| `maa.enabled` | boolean | `false` | runtime（MaaBridge 装配）+ maa 插件 | MAA 游戏控制总开关；false 时插件不注册（`maa …` 会落到 LLM） |
+| `maa.maaPath` | string | `D:\Game\MAA` | MaaBridge → worker.py | MAA 安装目录（含 `MaaCore.dll` 与 `resource/`） |
+| `maa.python` | string | `python` | MaaBridge | 跑 worker 的 Python 解释器（需能 import ctypes，MAA 自带绑定） |
+| `maa.adbPath` / `maa.adbAddress` | string | `adb.exe` / `127.0.0.1:5555` | worker.py → MaaCore | adb 可执行文件与设备地址（MuMu 常见 `127.0.0.1:16384`） |
+| `maa.connectConfig` | string | `General` | worker.py → MaaCore | MAA 连接配置名（如 `MuMuEmulator12`） |
+| `maa.workerPort` | number | `0` | MaaBridge | worker 端口（0 = 系统分配） |
+| `maa.taskTimeoutMinutes` | number | `60` | worker.py | 单任务超时后自动停止 |
+| `maa.pollIntervalSeconds` | number | `2` | maa 插件 | 结果轮询间隔（秒） |
 
 ## llm.* 块（一个块喂给 Summarizer 与 ChatBrain 两个消费者）
 

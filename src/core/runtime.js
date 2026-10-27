@@ -43,6 +43,8 @@ import { createSummaryPlugin } from '../plugins/summary.js';
 import { createRefreshPlugin } from '../plugins/refresh.js';
 import { createReportPlugin } from '../plugins/report.js';
 import { createWebUiPlugin } from '../plugins/webui.js';
+import { MaaBridge } from './platform/maa.js';
+import { createMaaPlugin } from '../plugins/maa.js';
 import { commandPlugins } from '../plugins/index.js';
 import { PluginRegistry } from './registry.js';
 import { createRouting } from './routing.js';
@@ -202,7 +204,32 @@ export function createApp(config, overrides = {}) {
     cfg: config.webui || {},
     startCtx: { getStatus, getLingo: () => lingo, getMemory: () => memory, getConfig: () => config, refreshData },
   });
-  for (const p of [commandPlugins, summaryPlugin, refreshPlugin, reportPlugin, chatPlugin, webuiPlugin].flat()) registry.register(p);
+  // MAA 游戏控制（config.maa.enabled 时装配；bridge 由插件 hooks 启停，未启用则整块不注册）
+  const maaCfg = config.maa || {};
+  const maaBridge = maaCfg.enabled
+    ? new MaaBridge({
+        maaPath: maaCfg.maaPath,
+        python: maaCfg.python,
+        adbPath: maaCfg.adbPath,
+        adbAddress: maaCfg.adbAddress,
+        connectConfig: maaCfg.connectConfig,
+        workerScript: maaCfg.workerScript,
+        port: maaCfg.workerPort ?? 0,
+        token: maaCfg.token,
+        timeoutMinutes: maaCfg.taskTimeoutMinutes ?? 60,
+      })
+    : null;
+  const maaPlugin = maaBridge
+    ? createMaaPlugin({
+        bridge: maaBridge,
+        client,
+        ownerId: config.owner?.userId ?? 0,
+        pollIntervalMs: Math.max(200, (maaCfg.pollIntervalSeconds ?? 2) * 1000),
+      })
+    : null;
+  for (const p of [commandPlugins, summaryPlugin, refreshPlugin, reportPlugin, chatPlugin, webuiPlugin, maaPlugin].flat().filter(Boolean)) {
+    registry.register(p);
+  }
 
   /**
    * 数据更新编排公共入口（桥接层；P3b 起正文归 refresh 插件的 api.refresh——自动定时器/S11/WebUI

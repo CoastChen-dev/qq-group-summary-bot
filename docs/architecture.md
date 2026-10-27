@@ -195,7 +195,7 @@ platform/ 与 knowledge/ 组间：knowledge → platform 仅两条——logger�
 filter.js 零 import；plugins 间零互 import（服务一律经 createApp 注入/ctx 注入）
 ```
 
-**实例化关系**：`createApp` new 出 MessageStore / NapCatClient / Summarizer / Scheduler / Analytics / DataRefresher 6 个平台服务 + UserMemory（config.memory.enabled=false 时为 null）+ LingoStore / ArkDB / KnowledgeCache / 三个 Wiki 检索器 / WebSearchRetriever 7 个知识单例，共 14 个实例；`ChatBrain`（注入 7 个知识单例 + UserMemory）、`createRouting`（注入判定所需服务与 state 共享状态对象）与 11 个插件描述符随后装配。**重构前最大耦合点「ChatBot 是 lingo/arkdb 等服务宿主、commands/webui 反向借用 chatBot.lingo」已拆**：知识服务现在是 runtime 装配的事实共享单例，brain（字段引用）与指令插件（dispatch ctx）与 webui（getLingo/getMemory）注入/借用的都是同一批实例（详见 refactor-proposal「服务上移」）。
+**实例化关系**：`createApp` new 出 MessageStore / NapCatClient / Summarizer / Scheduler / Analytics / DataRefresher 6 个平台服务 + UserMemory（config.memory.enabled=false 时为 null）+ LingoStore / ArkDB / KnowledgeCache / 三个 Wiki 检索器 / WebSearchRetriever 7 个知识单例，共 14 个实例；`ChatBrain`（注入 7 个知识单例 + UserMemory）、`createRouting`（注入判定所需服务与 state 共享状态对象）与 12 个插件描述符（`config.maa.enabled` 时含 maa + MaaBridge）随后装配。**重构前最大耦合点「ChatBot 是 lingo/arkdb 等服务宿主、commands/webui 反向借用 chatBot.lingo」已拆**：知识服务现在是 runtime 装配的事实共享单例，brain（字段引用）与指令插件（dispatch ctx）与 webui（getLingo/getMemory）注入/借用的都是同一批实例（详见 refactor-proposal「服务上移」）。
 
 ## 8. 已知怪癖与坑（改代码前必读）
 
