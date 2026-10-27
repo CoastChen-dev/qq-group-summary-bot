@@ -15,6 +15,7 @@
  */
 import { log, err } from './platform/logger.js';
 import { fmtFull } from './platform/store.js';
+import { splitMessage } from './platform/text.js';
 
 /**
  * 路由判定域工厂：S1–S13 判定链 + 离线补偿。P5b 自 runtime.js createApp 逐字拆出——
@@ -271,11 +272,14 @@ export function createRouting(options) {
     });
     if (typeof cmdReply === 'string') {
       log(`[group ${event.group_id}] 指令响应: ${question.slice(0, 30)}`);
-      // 真 @ 提问者发送指令回复（无 user_id 时退化为纯文本）
-      const send = event.user_id
-        ? client.sendGroupMsgAt(event.group_id, event.user_id, cmdReply)
-        : client.sendGroupMsg(event.group_id, cmdReply);
-      send.catch((e) => err(`[group ${event.group_id}] 指令发送失败:`, e.message));
+      // 真 @ 提问者发送指令回复（无 user_id 时退化为纯文本）；超长按字节切条，第一条 @、其余纯文本
+      const parts = splitMessage(cmdReply);
+      (async () => {
+        for (let i = 0; i < parts.length; i++) {
+          if (i === 0 && event.user_id) await client.sendGroupMsgAt(event.group_id, event.user_id, parts[i]);
+          else await client.sendGroupMsg(event.group_id, parts[i]);
+        }
+      })().catch((e) => err(`[group ${event.group_id}] 指令发送失败:`, e.message));
     }
     return;
   }

@@ -29,6 +29,7 @@ const EXPECTED_EXPORTS = {
   'core/platform/scheduler.js': ['Scheduler'],
   'core/platform/store.js': ['MessageStore', 'segmentToText', 'extractText', 'localDate', 'hhmm', 'fmtFull'],
   'core/platform/summarizer.js': ['Summarizer'],
+  'core/platform/text.js': ['splitMessage', 'MAX_MESSAGE_BYTES'],
   'core/platform/usermem.js': ['UserMemory'],
   'core/knowledge/arkdb.js': ['ArkDB'],
   'core/knowledge/cache.js': ['KnowledgeCache'],

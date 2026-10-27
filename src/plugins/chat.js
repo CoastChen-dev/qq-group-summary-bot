@@ -28,6 +28,7 @@ import { PRIORITY } from '../core/registry.js';
 import { fetchRetry } from '../core/platform/http.js';
 import { EMOJI_LIKES, CORE_EMOJI_LIKES, isEmojiLike } from '../core/platform/emoji.js';
 import { isSensitive } from '../core/platform/filter.js';
+import { splitMessage } from '../core/platform/text.js';
 
 // 来源可信度权重（分数越高越可信）
 const SOURCE_TRUST = {
@@ -1142,13 +1143,16 @@ export function createChatPlugin(deps) {
      */
     handleMessage(ctx) {
       brain.chat(ctx.groupId, ctx.userName, ctx.text, ctx.userId, { messageId: ctx.messageId, faces: ctx.faces })
-        .then((reply) => {
-          if (!reply) return undefined;
+        .then(async (reply) => {
+          if (!reply) return;
           // 风控降险：出站内容敏感词兜底——命中隐私/违禁关键词时替换为安全文案，不发送原文
           const safe = isSensitive(reply) ? '这个话题我不太方便聊，我们换个话题吧~' : reply;
-          return ctx.userId
-            ? client.sendGroupMsgAt(ctx.groupId, ctx.userId, safe)
-            : client.sendGroupMsg(ctx.groupId, safe);
+          // 超长回复分段发（QQ 单条有长度上限，超了会被拒发）：第一条真 @ 提问者，其余纯文本，避免重复提醒
+          const parts = splitMessage(safe);
+          for (let i = 0; i < parts.length; i++) {
+            if (i === 0 && ctx.userId) await client.sendGroupMsgAt(ctx.groupId, ctx.userId, parts[i]);
+            else await client.sendGroupMsg(ctx.groupId, parts[i]);
+          }
         })
         .catch((e) => err(`[chat] 群 ${ctx.groupId} 发送失败:`, e.message));
       return true;

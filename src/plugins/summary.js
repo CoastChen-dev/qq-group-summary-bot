@@ -18,6 +18,7 @@
  */
 import { log, err } from '../core/platform/logger.js';
 import { fmtFull } from '../core/platform/store.js';
+import { splitMessage } from '../core/platform/text.js';
 import { PRIORITY } from '../core/registry.js';
 
 /**
@@ -81,7 +82,10 @@ export function createSummaryPlugin(deps) {
     const summary = await summarizer.summarize(groupId, kept, span, 'manual');
     const msg = `【群聊概括】\n${span}｜共 ${kept.length} 条消息\n\n${summary}`;
 
-    await client.sendGroupMsg(groupId, msg);
+    // 概括正文可能超 QQ 单条上限：按字节切条依次发，切分失败也不影响 lastSummaryAt 推进
+    for (const part of splitMessage(msg)) {
+      await client.sendGroupMsg(groupId, part);
+    }
     // 边界点：发送成功后才推进 lastSummaryAt（失败不写 → 下次重跑仍覆盖同一时段）
     store.setLastSummaryAt(groupId, nowSec);
     log(`[group ${groupId}] 概括已发送`);
