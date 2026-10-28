@@ -115,4 +115,58 @@ export class Summarizer {
     if (!content) throw new Error('LLM 返回内容为空');
     return content;
   }
+
+  /**
+   * 从一天的群聊记录里提炼 3-5 条「值得长期记住的小事」（情节记忆，存 EpisodicMemory）。
+   * 单独一次小请求（temperature 0.3、max_tokens 400），失败抛错由 report 插件兜底。
+   * @param {string|number} groupId - 群号（只进日志）
+   * @param {Object[]} recs - 当日消息记录（需含 time/name/text）
+   * @returns {Promise<string[]>} 记忆条目（每条 ≤40 字，最多 5 条）；无内容返回 []
+   */
+  async extractMemories(groupId, recs) {
+    if (!recs.length) return [];
+    const lines = recs.map((r) => `[${hhmm(r.time)}] ${r.name}: ${r.text}`);
+    const prompt = [
+      '你是群聊记忆整理器。下面是一天的群聊记录。',
+      '请提炼 3-5 条值得长期记住的小事：谁在玩什么/喜欢什么、群里发生的趣事、约定、常用梗、重要通知。',
+      '要求：每条不超过 40 字；必须来自记录里的真实信息，不要编造；不写 QQ 号/现实身份等隐私；不写色情、暴力、违法内容。',
+      '只输出 JSON 字符串数组，例如 ["小王在玩明日方舟","群里约好周六开黑"]；没有值得记的就输出 []。',
+      '',
+      '聊天记录：',
+      lines.slice(-this.maxMessages).join('\n'),
+    ].join('\n');
+
+    const resp = await fetchRetry(`${this.baseUrl}/chat/completions`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${this.apiKey}`,
+      },
+      body: JSON.stringify({
+        model: this.model,
+        messages: [
+          { role: 'system', content: '你是一个只输出 JSON 的群聊记忆整理器。' },
+          { role: 'user', content: prompt },
+        ],
+        temperature: 0.3,
+        max_tokens: 400,
+      }),
+    }, { timeoutMs: 60000, retries: 1, retryDelayMs: 2000 });
+
+    if (!resp.ok) throw new Error(`LLM API 错误 ${resp.status}`);
+    const data = await resp.json();
+    const content = data.choices?.[0]?.message?.content || '';
+    const m = content.match(/\[[\s\S]*\]/);
+    if (!m) return [];
+    try {
+      const arr = JSON.parse(m[0]);
+      if (!Array.isArray(arr)) return [];
+      return arr
+        .filter((x) => typeof x === 'string' && x.trim().length >= 2)
+        .map((x) => x.trim().slice(0, 40))
+        .slice(0, 5);
+    } catch {
+      return [];
+    }
+  }
 }

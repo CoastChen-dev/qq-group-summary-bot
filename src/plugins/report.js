@@ -40,7 +40,7 @@ import { log, err } from '../core/platform/logger.js';
  * @returns {Object} 注册表可直接 register 的插件描述符
  */
 export function createReportPlugin(deps) {
-  const { store, client, summarizer, scheduler, filterMessages, trackedGroups, getAllGroupIds } = deps;
+  const { store, client, summarizer, scheduler, filterMessages, trackedGroups, getAllGroupIds, episodic } = deps;
   const reportUserId = deps.reportUserId || 0;
   const reportMinMessages = deps.reportMinMessages ?? 100;
   const isReady = deps.isReady;
@@ -85,6 +85,7 @@ export function createReportPlugin(deps) {
 
     const groups = trackedGroups().length > 0 ? trackedGroups() : await getAllGroupIds();
     const activeGroups = [];
+    const quietGroups = []; // 不够日报门槛、但仍值得记一笔的群（≥5 条）
 
     for (const gid of groups) {
       store.loadFromDisk(gid, yesterdayStart, todayStart);
@@ -94,6 +95,18 @@ export function createReportPlugin(deps) {
         log(`[report] 群 ${gid} 已过滤 ${filtered.length} 条敏感/隐私消息`);
       }
       if (kept.length >= reportMinMessages) activeGroups.push({ gid, recs: kept });
+      else if (kept.length >= 5) quietGroups.push({ gid, recs: kept });
+    }
+
+    // 情节记忆：冷清群也记（≥5 条），免得「那天什么都没发生」；失败不影响日报
+    for (const { gid, recs } of quietGroups) {
+      if (!episodic || typeof summarizer.extractMemories !== 'function') break;
+      try {
+        const items = await summarizer.extractMemories(gid, recs);
+        if (items.length) episodic.save(gid, yesterdayLabel, items);
+      } catch (e) {
+        log(`[report] 群 ${gid} 情节记忆提炼失败: ${e.message}`);
+      }
     }
 
     if (activeGroups.length === 0) {
@@ -109,6 +122,15 @@ export function createReportPlugin(deps) {
         const summary = await summarizer.summarize(gid, recs, yesterdayLabel, 'daily');
         parts.push({ name, text: `${recs.length} 条消息\n${summary}` });
         log(`[report] 群 ${gid}(${name}) 日报已生成`);
+        // 情节记忆：把昨天的小事存下来，供以后对话作背景（失败不影响日报）
+        if (episodic && typeof summarizer.extractMemories === 'function') {
+          try {
+            const items = await summarizer.extractMemories(gid, recs);
+            if (items.length) episodic.save(gid, yesterdayLabel, items);
+          } catch (e) {
+            log(`[report] 群 ${gid} 情节记忆提炼失败: ${e.message}`);
+          }
+        }
       } catch (e) {
         err(`[report] 群 ${gid} 日报失败:`, e.message);
       }

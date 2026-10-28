@@ -146,7 +146,7 @@ function scoreResult(source, { size = 0, wordcount = 0, title = '' } = {}) {
  * @param {Object} [deps.toolsCfg={}] - config.tools 子集（enabled 总开关、maxRounds 工具轮次上限）
  */
 export class ChatBrain {
-  constructor({ cfg = {}, lingo, arkdb, cache, wiki, moegirl, wikipedia, webSearch, usermem, memoryCfg = {}, tools = [], toolsCfg = {}, systemPromptFile = '' } = {}) {
+  constructor({ cfg = {}, lingo, arkdb, cache, wiki, moegirl, wikipedia, webSearch, usermem, memoryCfg = {}, tools = [], toolsCfg = {}, systemPromptFile = '', historyDir = '', episodic = null } = {}) {
     this.apiKey = cfg.apiKey || process.env.LLM_API_KEY || '';
     this.baseUrl = (cfg.baseUrl || 'https://api.openai.com/v1').replace(/\/+$/, '');
     this.model = cfg.model || 'gpt-3.5-turbo';
@@ -197,10 +197,48 @@ export class ChatBrain {
     // 全局并发信号量：同时最多 3 个 LLM 请求，避免 API 限流
     this.semaphore = new Semaphore(cfg.chatConcurrency ?? 3);
 
-    // 每群运行时状态（内存，不落盘、重启即清）：对话历史与群成员昵称映射
+    // 每群运行时状态：对话历史可落盘（historyDir，重启续接），群成员昵称映射仅内存
     this.groupHistory = new Map();
+    this.historyDir = historyDir || '';
+    this.episodic = episodic; // EpisodicMemory（最近几天的群记忆，注入 prompt 作背景）
+    if (this.historyDir) this._loadHistories();
     // 群 → Map(QQ → 最近昵称)：实名上下文前缀与「按昵称检索其记忆」用
     this.groupMembers = new Map();
+  }
+
+  // 历史落盘路径（群号做安全化，防路径穿越）
+  _historyFile(groupId) {
+    const safe = String(groupId ?? '').replace(/[^\w.-]/g, '_');
+    return path.join(this.historyDir, `${safe}.json`);
+  }
+
+  // 启动时把 data/chat_history/*.json 读回内存（每群裁到 historyLimit）
+  _loadHistories() {
+    let files = [];
+    try {
+      files = fs.readdirSync(this.historyDir).filter((f) => f.endsWith('.json'));
+    } catch {
+      return;
+    }
+    for (const f of files) {
+      try {
+        const arr = JSON.parse(fs.readFileSync(path.join(this.historyDir, f), 'utf8'));
+        if (!Array.isArray(arr) || !arr.length) continue;
+        const gid = f.replace(/\.json$/, '');
+        this.groupHistory.set(gid, arr.slice(-this.historyLimit));
+      } catch { /* 单群损坏跳过 */ }
+    }
+  }
+
+  // 把某群历史写盘（失败只记日志；文件小，直接同步写）
+  _saveHistory(groupId) {
+    if (!this.historyDir) return;
+    try {
+      fs.mkdirSync(this.historyDir, { recursive: true });
+      fs.writeFileSync(this._historyFile(groupId), JSON.stringify(this.getHistory(groupId)));
+    } catch (e) {
+      log(`[chat] 群 ${groupId} 历史写盘失败: ${e.message}`);
+    }
   }
 
   // 返回群内该用户的展示昵称（群名片优先由调用方传入），并登记进成员映射（供按昵称检索记忆）
@@ -227,8 +265,9 @@ export class ChatBrain {
    * @returns {Array<{role: string, content: string}>} 该群历史数组（返回引用，调用方可直接 push）
    */
   getHistory(groupId) {
-    if (!this.groupHistory.has(groupId)) this.groupHistory.set(groupId, []);
-    return this.groupHistory.get(groupId);
+    const key = String(groupId);
+    if (!this.groupHistory.has(key)) this.groupHistory.set(key, []);
+    return this.groupHistory.get(key);
   }
 
   // 识别"XX是什么意思/是什么梗/XX是谁"这类提问，即使不命中关键词表也尝试检索
@@ -256,6 +295,7 @@ export class ChatBrain {
     const h = this.getHistory(groupId);
     h.push({ role, content });
     if (h.length > this.historyLimit) h.splice(0, h.length - this.historyLimit);
+    this._saveHistory(groupId);
   }
 
   /**
@@ -332,6 +372,11 @@ export class ChatBrain {
     }
     if (Array.isArray(faces) && faces.length) {
       userContent += `\n\n【消息附带表情】对方这条消息里含表情，ID：${faces.join('、')}——用户说「贴/发这个表情」时，可把这些 ID 直接作为 emoji 参数传给 react_emoji / send_face。`;
+    }
+    // 长期情节记忆（最近几天群里的事）：只作背景，别逐条复述
+    const episodicText = this.episodic?.format(groupId);
+    if (episodicText) {
+      userContent = `【最近几天群里的事（只作背景，不要逐条复述）】\n${episodicText}\n\n${userContent}`;
     }
     // 免 @ 接话时补最近群聊语境（只作背景，不要逐条回应）
     if (Array.isArray(extra.recent) && extra.recent.length) {
@@ -843,7 +888,10 @@ export class ChatBrain {
    * 副作用：删除内存 groupHistory 中的该群条目
    */
   clearHistory(groupId) {
-    this.groupHistory.delete(groupId);
+    this.groupHistory.delete(String(groupId));
+    if (this.historyDir) {
+      try { fs.rmSync(this._historyFile(groupId), { force: true }); } catch { /* 忽略 */ }
+    }
   }
 }
 

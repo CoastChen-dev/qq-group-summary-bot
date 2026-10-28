@@ -313,6 +313,37 @@ describe('report 插件（每日日报，仅 hooks）', () => {
     assert.ok(sent[0].msg.includes('测试群') && sent[0].msg.includes('日报内容'));
   });
 
+  it('日报后提炼情节记忆并落库（日期=昨日标签）', async () => {
+    let run;
+    const saved = [];
+    const sent = [];
+    const plugin = createReportPlugin({
+      store: { loadFromDisk: () => {}, collectRange: () => [{ time: Math.floor(Date.now() / 1000), text: '摸鱼' }] },
+      client: {
+        selfId: 1,
+        getGroupInfo: async () => ({ group_name: '测试群' }),
+        sendPrivateForward: async (uid, nodes) => sent.push({ uid, nodes }),
+        sendPrivateMsg: async () => {},
+      },
+      summarizer: { summarize: async () => '日报内容', extractMemories: async () => ['小王在玩方舟', '周六开黑'] },
+      scheduler: { start: (fn) => { run = fn; }, stop: () => {} },
+      filterMessages: passThrough,
+      trackedGroups: () => [1],
+      getAllGroupIds: async () => [1],
+      episodic: { save: (gid, date, items) => saved.push({ gid, date, items }) },
+      reportUserId: 9,
+      reportMinMessages: 1,
+      isReady: () => true,
+    });
+    plugin.hooks.start();
+    await run();
+    assert.equal(sent.length, 1);
+    assert.equal(saved.length, 1);
+    assert.equal(saved[0].gid, 1);
+    assert.match(saved[0].date, /^\d{4}-\d{2}-\d{2}$/);
+    assert.deepEqual(saved[0].items, ['小王在玩方舟', '周六开黑']);
+  });
+
   it('月初跨月：昨日标签取上月末一天，不出现 00 日（2026-11-01 → 2026-10-31）', async (t) => {
     t.mock.timers.enable({ apis: ['Date'], now: new Date(2026, 10, 1, 9, 0, 0) }); // 11 月 1 日 9:00
     let run;

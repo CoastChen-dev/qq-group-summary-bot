@@ -22,6 +22,7 @@ const EXPECTED_EXPORTS = {
   'core/platform/analytics.js': ['Analytics'],
   'core/platform/filter.js': ['isSensitive', 'sanitizeText', 'filterMessages'],
   'core/platform/emoji.js': ['EMOJI_LIKES', 'CORE_EMOJI_LIKES', 'randomEmojiLike', 'isEmojiLike'],
+  'core/platform/episodic.js': ['EpisodicMemory'],
   'core/platform/http.js': ['fetchRetry'],
   'core/platform/logger.js': ['log', 'err'],
   'core/platform/lifecycle.js': ['installProcessGuards'],

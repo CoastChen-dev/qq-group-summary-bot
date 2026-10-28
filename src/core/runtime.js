@@ -44,6 +44,7 @@ import { createRefreshPlugin } from '../plugins/refresh.js';
 import { createReportPlugin } from '../plugins/report.js';
 import { createWebUiPlugin } from '../plugins/webui.js';
 import { MaaBridge } from './platform/maa.js';
+import { EpisodicMemory } from './platform/episodic.js';
 import { createMaaPlugin } from '../plugins/maa.js';
 import { commandPlugins } from '../plugins/index.js';
 import { PluginRegistry } from './registry.js';
@@ -137,10 +138,16 @@ export function createApp(config, overrides = {}) {
     ownerId: config.owner?.userId ?? config.report?.userId ?? 0,
     projectRoot: root,
   });
+  // 长期记忆：群对话历史落盘（重启续接）+ 每日情节记忆（日报后提炼，最近 N 天注入 prompt）
+  const episodic = overrides.episodic || new EpisodicMemory(path.join(dataDir, 'memory'), {
+    days: config.memory?.episodicDays ?? 3,
+  });
   const brain = overrides.brain || new ChatBrain({
     cfg: llm, lingo, arkdb, cache, wiki, moegirl, wikipedia, webSearch, usermem: memory, memoryCfg,
     tools, toolsCfg: config.tools || {},
     systemPromptFile: path.join(root, 'prompts', 'chat-system.md'), // 人格提示词文件（缺失回退内置默认）
+    historyDir: path.join(dataDir, 'chat_history'), // 会话续接：重启后还记得刚才聊到哪
+    episodic, // 最近几天的群记忆（只作 prompt 背景）
   });
 
   // 群路由相关配置常量（自 config.json 派生；groups 空数组 = 跟踪全部群）
@@ -220,6 +227,7 @@ export function createApp(config, overrides = {}) {
   const reportPlugin = createReportPlugin({
     store, client, summarizer, scheduler, filterMessages,
     trackedGroups, getAllGroupIds: routing.getAllGroupIds,
+    episodic,
     reportUserId, reportMinMessages,
     isReady: () => state.ready,
   });
@@ -353,7 +361,7 @@ export function createApp(config, overrides = {}) {
 
   return {
     config,
-    services: { dataDir, llm, store, client, summarizer, brain, lingo, arkdb, cache, wiki, moegirl, wikipedia, webSearch, memory, scheduler, analytics, refresher, registry },
+    services: { dataDir, llm, store, client, summarizer, brain, lingo, arkdb, cache, wiki, moegirl, wikipedia, webSearch, memory, episodic, scheduler, analytics, refresher, registry },
     refreshData,
     getStatus,
     start,

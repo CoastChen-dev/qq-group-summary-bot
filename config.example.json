@@ -97,7 +97,8 @@
     "file": "./data/user_memory.json",
     "autoExtract": true,
     "maxFactsPerUser": 20,
-    "maxFactsGlobal": 2000
+    "maxFactsGlobal": 2000,
+    "episodicDays": 3
   },
   "webui": {
     "enabled": true,

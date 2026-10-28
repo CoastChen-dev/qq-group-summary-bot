@@ -135,6 +135,27 @@ describe('ChatBrain buildMessages 实名上下文与用户记忆', () => {
     assert.ok(user.content.includes('甲：在吗'));
   });
 
+  it('对话历史落盘：重启后能接上；clearHistory 连文件一起删', () => {
+    const dir = makeTmp();
+    const historyDir = path.join(dir, 'chat_history');
+    const b1 = new ChatBrain({ cfg: {}, historyDir });
+    b1.pushMessage('g1', 'user', '甲：在吗');
+    b1.pushMessage('g1', 'assistant', '在的');
+    const b2 = new ChatBrain({ cfg: {}, historyDir });
+    assert.equal(b2.getHistory('g1').length, 2);
+    assert.equal(b2.getHistory('g1')[1].content, '在的');
+    b2.clearHistory('g1');
+    assert.equal(b2.getHistory('g1').length, 0);
+    assert.equal(fs.existsSync(path.join(historyDir, 'g1.json')), false);
+  });
+
+  it('情节记忆注入：buildMessages 带上最近几天群里的事（只作背景）', () => {
+    const brain = new ChatBrain({ cfg: {}, episodic: { format: () => '- 10-27：小王在玩方舟' } });
+    const user = brain.buildMessages('g1', '张三', '聊聊', '', 'u9').pop();
+    assert.match(user.content, /最近几天群里的事/);
+    assert.ok(user.content.includes('小王在玩方舟'));
+  });
+
   it('_parseFacts：容忍 markdown 包裹/前后缀；非数组与坏 JSON 返回空', () => {
     const brain = new ChatBrain({ cfg: {} });
     assert.deepEqual(brain._parseFacts('```json\n["喜欢夜莺", "在医疗部工作"]\n```'), ['喜欢夜莺', '在医疗部工作']);
