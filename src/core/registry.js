@@ -51,6 +51,7 @@ export class PluginRegistry {
    *   - handleMessage: (ctx) => string|true|null|undefined
    *   - hooks: {start(ctx?), stop()} 可选
    *   - api: 任意导出对象（供 runtime/其他插件经 registry 取用）
+   *   - autoSpeak: true = 参与免 @ 自动接话分发（仅 chat；默认 false）
    * @returns {PluginRegistry} this（链式）
    */
   register(plugin) {
@@ -68,6 +69,7 @@ export class PluginRegistry {
       handleMessage: plugin.handleMessage,
       hooks: plugin.hooks || {},
       api: plugin.api,
+      autoSpeak: plugin.autoSpeak === true, // 免 @ 接话标记（仅 chat 置 true）
     };
     if (idx >= 0) this.plugins[idx] = entry;
     else this.plugins.push(entry);
@@ -101,6 +103,25 @@ export class PluginRegistry {
         continue;
       }
       if (r !== null && r !== undefined) return r;
+    }
+    return null;
+  }
+
+  /**
+   * 自动接话分发（2026-10，免 @ 群试点）：只发给显式声明 `autoSpeak: true` 的插件（当前仅 chat）。
+   * 普通指令插件不参与——否则闲聊里出现「总结」「刷新数据」会被当成指令执行。
+   * @param {Object} ctx - 消息上下文（群号/用户/文本/共享服务句柄；内部会补 autoSpeak: true）
+   * @returns {string|true|null} 同 dispatch
+   */
+  dispatchAutoSpeak(ctx) {
+    for (const p of this.sorted()) {
+      if (!p.enabled || p.autoSpeak !== true) continue;
+      try {
+        const r = p.handleMessage({ ...ctx, autoSpeak: true });
+        if (r !== null && r !== undefined) return r;
+      } catch (e) {
+        log(`[registry] 插件 ${p.name} 接话分发异常: ${e.message}`);
+      }
     }
     return null;
   }

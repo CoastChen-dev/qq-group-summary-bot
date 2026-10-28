@@ -81,6 +81,10 @@
 | `llm.chatHistoryLimit` | number | `12` | ChatBrain | 每群保留的上下文条数 |
 | `llm.chatConcurrency` | number | `3` | ChatBrain | LLM 请求并发上限（信号量） |
 | `llm.chatCooldownSeconds` | number | `3` | ChatBrain | 同一人的应答冷却秒数（窗口内再 @ 静默丢弃；0 = 不限） |
+| `llm.autoSpeak.groups` | array<number> | `[]` | routing + chat 插件 | 免 @ 自动接话的群号列表；空 = 所有群仍需 @。只走 chat，不触发指令 |
+| `llm.autoSpeak.cooldownSeconds` | number | `60` | chat 插件 | 同群两次自动接话的最小间隔 |
+| `llm.autoSpeak.probability` | number | `0.35` | chat 插件 | 非提问/未点名消息的接话概率（0–1） |
+| `llm.autoSpeak.maxPerHour` | number | `12` | chat 插件 | 同群每小时自动接话上限 |
 | `llm.chatMinuteLimit` | number | `20` | ChatBrain | 同群每分钟最多触发的 LLM 应答次数（超限静默丢弃；0 = 不限） |
 | `llm.retrievalGate` | boolean | `true` | ChatBrain | 检索门：闲聊消息跳过通用检索（提速）；false 恢复总是检索（`!== false` 视为开） |
 | `llm.thinking` | boolean \| `'auto'` | `'auto'` | ChatBrain | 深度思考：`true` 恒开 / `false` 恒关 / `auto` 仅重问题（数学/证明/代码类，见 `HEAVY_RE`）开启 |

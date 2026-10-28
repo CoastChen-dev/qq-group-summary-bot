@@ -284,8 +284,12 @@ export class ChatBrain {
    * @param {string[]} [faces=[]] - 提问者消息里的表情段 ID（附注给模型，供「贴/发同款表情」）
    * @returns {Object[]} [{role, content}] 消息数组（system 恒在首位）
    */
-  buildMessages(groupId, userName, question, wikiContext = '', userId = '', faces = []) {
+  buildMessages(groupId, userName, question, wikiContext = '', userId = '', faces = [], extra = {}) {
     const sysLines = [...this._currentPromptLines()];
+    // 免 @ 群自动接话（2026-10）：像群友一样自然插话，别客服腔、别 @ 人、别每题都抢
+    if (extra.autoSpeak) {
+      sysLines.push('当前是自由群聊模式：你是群里的一员，可以像普通群友一样自然接话，1-2 句就够；不要客服腔、不要写「请问」「为您解答」这类话术，不要 @ 人，也不要每条消息都抢着回——不想接就不接。');
+    }
     // 工具提示（仅在启用工具时注入）：告知模型可用能力与克制原则
     if (this.toolsEnabled && this.tools.length) {
       sysLines.push('工具：需要时可以调用工具（贴表情/发表情、查干员/藏品/卡池/群统计、查或记用户记忆、改自己的昵称/签名/名片；文档与提示词读写仅限博士=主人）；表情类工具要克制，只在真的合适时用，不要为了用工具而用工具。');
@@ -313,6 +317,10 @@ export class ChatBrain {
     }
     if (Array.isArray(faces) && faces.length) {
       userContent += `\n\n【消息附带表情】对方这条消息里含表情，ID：${faces.join('、')}——用户说「贴/发这个表情」时，可把这些 ID 直接作为 emoji 参数传给 react_emoji / send_face。`;
+    }
+    // 免 @ 接话时补最近群聊语境（只作背景，不要逐条回应）
+    if (Array.isArray(extra.recent) && extra.recent.length) {
+      userContent = `【最近群聊（只作语境，不要逐条回应）】\n${extra.recent.join('\n')}\n\n${userContent}`;
     }
     messages.push({ role: 'user', content: userContent });
     return messages;
@@ -601,7 +609,10 @@ export class ChatBrain {
    * 副作用：调 LLM；仅成功时写群历史（内存）
    */
   async _reply(groupId, userName, question, knowledgeContext, userId = '', opts = {}) {
-    const messages = this.buildMessages(groupId, userName, question, knowledgeContext, userId, opts.faces);
+    const messages = this.buildMessages(groupId, userName, question, knowledgeContext, userId, opts.faces, {
+      autoSpeak: opts.autoSpeak === true,
+      recent: opts.recent,
+    });
     const speaker = this._displayName(groupId, userName, userId);
 
     try {
@@ -618,7 +629,8 @@ export class ChatBrain {
       return reply;
     } catch (e) {
       log(`[chat] 群 ${groupId} 回复失败，回退默认消息: ${e.message}`);
-      return this.defaultReply;
+      // 免 @ 接话失败就闭嘴（不主动冒出一句「抱歉…」）
+      return opts.autoSpeak ? null : this.defaultReply;
     }
   }
 
@@ -1193,19 +1205,71 @@ export function createChatTools({ arkdb, analytics, usermem, react, emojiCooldow
  * @param {Object} deps - runtime 装配期注入
  * @param {Object} deps.brain - ChatBrain 实例（共享单例；chat(groupId, userName, text, userId)）
  * @param {Object} deps.client - NapCatClient 实例（群发 brain 回复）
+ * @param {Object} [deps.autoSpeak] - 免 @ 自动接话配置 {groups, cooldownSeconds, probability, maxPerHour}
+ * @param {Function} [deps.getRecent] - (groupId, n) => string[] 最近群聊语境（免 @ 接话用）
  * @returns {Object} 注册表可直接 register 的插件描述符
  */
 export function createChatPlugin(deps) {
-  const { brain, client } = deps;
+  const { brain, client, getRecent } = deps;
+  const autoCfg = deps.autoSpeak || {};
+  const autoGroups = new Set((autoCfg.groups || []).map(String));
+  const cooldownMs = Math.max(0, Number(autoCfg.cooldownSeconds ?? 60)) * 1000;
+  const probability = Math.min(Math.max(Number(autoCfg.probability ?? 0.35), 0), 1);
+  const maxPerHour = Math.max(1, Number(autoCfg.maxPerHour ?? 12));
+  const lastAutoAt = new Map(); // 群 → 上次自动接话时间
+  const hourWindow = new Map(); // 群 → { start, count }
+
+  /** 免 @ 接话门：退避/频控 + 信号判定（点名或提问直接接，其余按概率） */
+  function shouldAutoSpeak(ctx) {
+    const gid = String(ctx.groupId);
+    if (!autoGroups.has(gid)) return false;
+    const text = String(ctx.text || '').trim();
+    if (text.length < 3) return false;
+    if (/^\[(图片|表情|语音|视频|动画表情|文件|链接)\]$/.test(text)) return false;
+    const now = Date.now();
+    if (now - (lastAutoAt.get(gid) ?? 0) < cooldownMs) return false;
+    const w = hourWindow.get(gid);
+    if (!w || now - w.start >= 3600000) hourWindow.set(gid, { start: now, count: 0 });
+    else if (w.count >= maxPerHour) return false;
+    const strong = /Mon3tr|mon3tr|凯尔希|PRTS/i.test(text)
+      || /[？?]|什么|怎么|为什么|为啥|哪个|哪里|多少|有没有|是不是|能不能|可不可以|求|推荐|介绍|讲讲|说说/.test(text);
+    if (!strong && Math.random() >= probability) return false;
+    lastAutoAt.set(gid, now);
+    const win = hourWindow.get(gid);
+    win.count++;
+    return true;
+  }
+
+  /** 免 @ 模式：不 @ 人，纯文本（超长切条） */
+  function sendAutoReply(ctx, text) {
+    for (const part of splitMessage(text)) {
+      client.sendGroupMsg(ctx.groupId, part).catch((e) => err(`[chat] 群 ${ctx.groupId} 接话发送失败:`, e.message));
+    }
+  }
+
   return {
     name: 'chat',
     priority: PRIORITY.chat,
+    autoSpeak: true, // 仅该插件参与 registry.dispatchAutoSpeak（免 @ 群）
     /**
      * LLM 兜底分发（原 S13；分发带最末，必被到达）：触发 brain.chat 后立即返回 true。
+     * ctx.autoSpeak = true 时走「自动接话门」：不 @ 人、自然短句、带最近群聊语境。
      * @param {Object} ctx - 消息上下文（runtime S12 分发）：{groupId, userName, userId, text, ...}
-     * @returns {true} 恒消费（chatEnabled=false 时 brain.chat 短路返回 null → 无回复但已处理）
+     * @returns {true|null} 普通消息恒消费；免 @ 消息在接话门判定为「不接」时返回 null
      */
     handleMessage(ctx) {
+      if (ctx.autoSpeak) {
+        if (!shouldAutoSpeak(ctx)) return null;
+        const recent = typeof getRecent === 'function' ? getRecent(ctx.groupId, 8, ctx.messageId) : [];
+        brain.chat(ctx.groupId, ctx.userName, String(ctx.text || '').trim(), ctx.userId, {
+          messageId: ctx.messageId, faces: ctx.faces, autoSpeak: true, recent,
+        }).then((reply) => {
+          if (!reply) return;
+          const safe = isSensitive(reply) ? '这个话题我不太方便聊，我们换个话题吧~' : reply;
+          sendAutoReply(ctx, safe);
+        }).catch((e) => err(`[chat] 群 ${ctx.groupId} 接话失败:`, e.message));
+        return true;
+      }
       brain.chat(ctx.groupId, ctx.userName, ctx.text, ctx.userId, { messageId: ctx.messageId, faces: ctx.faces })
         .then(async (reply) => {
           if (!reply) return;

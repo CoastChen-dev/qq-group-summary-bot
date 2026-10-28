@@ -178,12 +178,17 @@ export function createApp(config, overrides = {}) {
   // getAllGroupIds 原是下方函数声明（依赖提升），拆出后为工厂返回值属性——故必须先于插件
   // 注册创建（report 插件注册参数 getAllGroupIds 取之）；state 对象由装配段构造，路由与插件
   // 注册段（isReady 闭包）读写同一份
+  // 免 @ 自动接话（2026-10）：仅 config.llm.autoSpeak.groups 里的群生效；只走 chat 插件，
+  // 不触发指令（见 registry.dispatchAutoSpeak）。
+  const autoSpeakCfg = llm.autoSpeak || {};
+  const autoSpeakGroups = new Set((autoSpeakCfg.groups || []).map(String));
   const routing = createRouting({
     store, analytics, client, registry, lingo, arkdb, memory, state,
     includeSelf, tracksGroup, trackedGroups,
     quietEnabled, quietStart, quietEnd,
     backfillMaxHours: config.backfill?.maxHours ?? 72,
     backfillMinOfflineMinutes: config.backfill?.minOfflineMinutes ?? 5,
+    autoSpeakGroups,
   });
   const summaryPlugin = createSummaryPlugin({
     store, summarizer, client, filterMessages,
@@ -202,7 +207,23 @@ export function createApp(config, overrides = {}) {
     reportUserId, reportMinMessages,
     isReady: () => state.ready,
   });
-  const chatPlugin = createChatPlugin({ brain, client });
+  const chatPlugin = createChatPlugin({
+    brain,
+    client,
+    autoSpeak: autoSpeakCfg,
+    // 最近群聊语境（免 @ 接话用）：内存里最近 10 分钟的消息，排除当前这条
+    getRecent: (gid, n = 8, excludeId = '') => {
+      try {
+        const since = Math.floor(Date.now() / 1000) - 600;
+        return store.collectSince(gid, since)
+          .filter((r) => String(r.id) !== String(excludeId))
+          .slice(-n)
+          .map((r) => `${r.name}：${r.text}`);
+      } catch {
+        return [];
+      }
+    },
+  });
   const webuiPlugin = createWebUiPlugin({
     cfg: config.webui || {},
     startCtx: { getStatus, getLingo: () => lingo, getMemory: () => memory, getConfig: () => config, refreshData },

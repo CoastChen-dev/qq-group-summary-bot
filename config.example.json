@@ -13,6 +13,12 @@
     "maxTokens": 2048,
     "chatEnabled": true,
     "chatHistoryLimit": 12,
+    "autoSpeak": {
+      "groups": [],
+      "cooldownSeconds": 60,
+      "probability": 0.35,
+      "maxPerHour": 12
+    },
     "chatCooldownSeconds": 3,
     "chatMinuteLimit": 20,
     "defaultReply": "抱歉，我现在不方便回复，稍后再试试吧~",

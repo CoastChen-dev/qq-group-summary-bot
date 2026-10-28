@@ -44,6 +44,23 @@ describe('PluginRegistry.register', () => {
   });
 });
 
+describe('PluginRegistry.dispatchAutoSpeak', () => {
+  it('只发给 autoSpeak:true 的插件，普通指令插件不参与', () => {
+    const reg = new PluginRegistry();
+    const seen = [];
+    reg.register({ name: 'cmd', priority: 700, handleMessage: (ctx) => { seen.push('cmd'); return '指令'; } });
+    reg.register({ name: 'auto', priority: 300, autoSpeak: true, handleMessage: (ctx) => { seen.push(ctx.autoSpeak); return true; } });
+    assert.equal(reg.dispatchAutoSpeak({ text: '随便聊聊' }), true);
+    assert.deepEqual(seen, [true]); // cmd 没被调用，auto 收到 autoSpeak:true
+  });
+
+  it('无 autoSpeak 插件时返回 null', () => {
+    const reg = new PluginRegistry();
+    reg.register({ name: 'cmd', handleMessage: () => 'x' });
+    assert.equal(reg.dispatchAutoSpeak({ text: 'hi' }), null);
+  });
+});
+
 describe('PluginRegistry.sorted / dispatch', () => {
   it('sorted 按 priority 降序、同分保注册序（稳定）', () => {
     const reg = new PluginRegistry();

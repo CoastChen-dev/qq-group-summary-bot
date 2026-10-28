@@ -67,6 +67,10 @@ function mkRouting(over = {}) {
   const store = {
     getLastSeenTs: (gid) => seenBy[String(gid)] ?? 0,
     addHistoryMessage: (gid, m) => { calls.added.push([gid, m]); return { text: '历史消息', time: m.time }; }, // 恒真值 = 新增
+    addMessage: (ev) => ({
+      id: String(ev.message_id), time: ev.time, userId: ev.user_id,
+      name: ev.sender?.nickname || '群友', text: ev.message?.[0]?.data?.text || '',
+    }),
     setLastSeenTs: (gid, t) => { calls.lastSeenSet.push([gid, t]); },
     getLastConnectedAt: () => (touched ? Math.floor(Date.now() / 1000) : (over.lastConnectedAt ?? 0)),
     touchConnected: () => { touched = true; },
@@ -75,7 +79,7 @@ function mkRouting(over = {}) {
   const analytics = { record: (gid, rec) => calls.recorded.push([gid, rec]) };
   const routing = createRouting({
     store, analytics, client,
-    registry: { dispatch: () => null },
+    registry: over.registry ?? { dispatch: () => null },
     lingo: {}, arkdb: {},
     state,
     includeSelf: false,
@@ -84,6 +88,7 @@ function mkRouting(over = {}) {
     quietEnabled: false, quietStart: 0, quietEnd: 8,
     backfillMaxHours: over.backfillMaxHours ?? 72,
     backfillStaggerMs: 0, // 测试关闭群间错峰（生产默认 800ms）
+    autoSpeakGroups: new Set((over.autoSpeakGroups || []).map(String)),
   });
   return { routing, state, client, calls, resetOnline };
 }
@@ -238,6 +243,41 @@ describe('routing：S1 connect → selfId 回填 + backfill 单次执行', () =>
     // 若先打心跳再读水位（旧实现），runtime.json 已被覆盖成 now → 这里会是 0 次
     assert.equal(calls.getHistory, 1);
     assert.equal(calls.added.length, 1);
+  });
+});
+
+describe('routing：免 @ 自动接话群（2026-10）', () => {
+  const msgEvent = (gid, text, id = 1) => ({
+    post_type: 'message', message_type: 'group', group_id: gid, message_id: id,
+    user_id: 2, time: Math.floor(Date.now() / 1000),
+    message: [{ type: 'text', data: { text } }],
+    sender: { nickname: '甲' },
+  });
+
+  it('autoSpeak 群的非 @ 消息走 dispatchAutoSpeak；普通群不触发', () => {
+    const seen = [];
+    const registry = {
+      dispatch: () => null,
+      dispatchAutoSpeak: (ctx) => { seen.push(ctx); return true; },
+    };
+    const { routing, calls } = mkRouting({ autoSpeakGroups: [1031477964], registry });
+    routing.onEvent(msgEvent(1031477964, '今天晚上吃什么'));
+    assert.equal(seen.length, 1);
+    assert.equal(seen[0].text, '今天晚上吃什么');
+    assert.equal(seen[0].userName, '甲');
+    assert.equal(seen[0].groupId, 1031477964);
+    assert.equal(calls.recorded.length, 1); // 消息照常入库
+
+    routing.onEvent(msgEvent(999, '普通群不接话', 2));
+    assert.equal(seen.length, 1);
+  });
+
+  it('未配置 autoSpeakGroups：所有群仍需 @（原行为不变）', () => {
+    const seen = [];
+    const registry = { dispatch: () => null, dispatchAutoSpeak: (ctx) => { seen.push(ctx); return true; } };
+    const { routing } = mkRouting({ registry });
+    routing.onEvent(msgEvent(1031477964, '随便说点什么'));
+    assert.equal(seen.length, 0);
   });
 });
 

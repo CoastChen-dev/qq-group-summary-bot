@@ -28,7 +28,8 @@ import { splitMessage } from './platform/text.js';
  *   tracksGroup（S4 群白名单判定）、trackedGroups（backfill 群集合，空数组 = 全部群）、
  *   quietEnabled/quietStart/quietEnd（S7 静默时段）、backfillMaxHours（sinceTs 兜底窗口）、
  *   backfillStaggerMs（backfill 群间错峰延迟，默认 300ms，风控降险；测试传 0 关闭）、
- *   backfillMinOfflineMinutes（离线短于该分钟数则跳过补拉，默认 5，风控降险）
+ *   backfillMinOfflineMinutes（离线短于该分钟数则跳过补拉，默认 5，风控降险）、
+ *   autoSpeakGroups（免 @ 自动接话的群集合，Set<string>；空 = 全群仍需 @）
  * @returns {{onEvent: Function, getAllGroupIds: Function, backfillHistory: Function}}
  *   onEvent 挂 client.onEvent（预载后）；getAllGroupIds 注入 report 插件；backfillHistory 由
  *   onEvent 的 S1 connect 分支调用（仅此一次），runtime 不再持有
@@ -38,6 +39,7 @@ export function createRouting(options) {
     store, analytics, client, registry, lingo, arkdb, memory, state,
     includeSelf, tracksGroup, trackedGroups,
     quietEnabled, quietStart, quietEnd, backfillMaxHours, backfillStaggerMs = 300, backfillMinOfflineMinutes = 5,
+    autoSpeakGroups = new Set(),
   } = options;
 
   /**
@@ -245,7 +247,28 @@ export function createRouting(options) {
     const mentionedByText = cmd.includes(`@${state.selfId}`) || cmd.includes('@机器人') || cmd.includes('@PRTS');
     const isMentioned = mentionedSelf || mentionedByText;
 
-    if (!isMentioned) return; // 未被 @：消息已入库计数，路由到此结束
+    // 消息里的表情段 ID（保留顺序；供 chat 侧识别「给我贴/发<表情图>」，见 plugins/chat.js buildMessages 附注）
+    const faceIds = Array.isArray(event.message)
+      ? event.message.filter((seg) => seg?.type === 'face' && seg.data?.id !== undefined).map((seg) => String(seg.data.id))
+      : [];
+    const senderName = event.sender?.card || event.sender?.nickname || '群友';
+
+    // S6' 免 @ 群（config.llm.autoSpeak.groups）：不要求 @，交给 chat 的接话门判断要不要说话。
+    // 只走 dispatchAutoSpeak（仅 chat 参与），避免闲聊里的「总结/刷新数据」被指令插件认领。
+    if (!isMentioned) {
+      if (!autoSpeakGroups.has(String(event.group_id))) return;
+      if (inQuietHours()) return;
+      registry.dispatchAutoSpeak?.({
+        lingo, arkdb, memory, analytics, client,
+        groupId: event.group_id,
+        userId: event.user_id,
+        userName: senderName,
+        messageId: rec.id,
+        text: cmd,
+        faces: faceIds,
+      });
+      return;
+    }
 
     // S7 静默时段吞掉一切 @ 行为（消息已入库，只是不回复）
     if (inQuietHours()) {
@@ -261,7 +284,6 @@ export function createRouting(options) {
     //（无 user_id 的异常事件退化为文本 @昵称）
     if (!question) {
       log(`[group ${event.group_id}] 收到仅@机器人（无内容）的消息`);
-      const senderName = event.sender?.card || event.sender?.nickname || '群友';
       const tip = '艾特Mon3tr干什么呀喵';
       const send = event.user_id
         ? client.sendGroupMsgAt(event.group_id, event.user_id, tip)
@@ -277,11 +299,6 @@ export function createRouting(options) {
     // true = 插件自驱已处理（总结/刷新/chat 异步进行、不 await）。chat 插件恒返回 true 消费消息，
     // 故分发不再有落空路径——原「严格 null 才落 chat」边界内化为分发带末端（行为不变：LLM 兜底
     // 仍最晚执行、仍不 await、失败回退文案照发），见 plugins/chat.js
-    const senderName = event.sender?.card || event.sender?.nickname || '群友';
-    // 消息里的表情段 ID（保留顺序；供 chat 侧识别「给我贴/发<表情图>」，见 plugins/chat.js buildMessages 附注）
-    const faceIds = Array.isArray(event.message)
-      ? event.message.filter((seg) => seg?.type === 'face' && seg.data?.id !== undefined).map((seg) => String(seg.data.id))
-      : [];
     const cmdReply = registry.dispatch({
       lingo: lingo,
       arkdb: arkdb,

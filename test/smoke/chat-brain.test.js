@@ -120,6 +120,19 @@ describe('ChatBrain buildMessages 实名上下文与用户记忆', () => {
     assert.ok(!user.content.includes('【用户记忆】'));
   });
 
+  it('免 @ 接话：system 加自由群聊约束，user 带最近群聊语境（只作背景）', () => {
+    const brain = new ChatBrain({ cfg: {} });
+    const msgs = brain.buildMessages('g1', '张三', '今晚吃啥', '', 'u9', [], {
+      autoSpeak: true,
+      recent: ['甲：在吗', '乙：饿了'],
+    });
+    assert.match(msgs[0].content, /自由群聊模式/);
+    assert.match(msgs[0].content, /不要 @ 人/);
+    const user = msgs.pop();
+    assert.match(user.content, /【最近群聊/);
+    assert.ok(user.content.includes('甲：在吗'));
+  });
+
   it('_parseFacts：容忍 markdown 包裹/前后缀；非数组与坏 JSON 返回空', () => {
     const brain = new ChatBrain({ cfg: {} });
     assert.deepEqual(brain._parseFacts('```json\n["喜欢夜莺", "在医疗部工作"]\n```'), ['喜欢夜莺', '在医疗部工作']);
