@@ -1271,10 +1271,47 @@ export function createChatPlugin(deps) {
     else w.count++;
   }
 
-  /** 免 @ 模式：不 @ 人，纯文本（超长切条） */
-  function sendAutoReply(ctx, text) {
-    for (const part of splitMessage(text)) {
-      client.sendGroupMsg(ctx.groupId, part).catch((e) => err(`[chat] 群 ${ctx.groupId} 接话发送失败:`, e.message));
+  // ---- 像真人打字：把回复拆成 1-3 条短消息，并加一点「思考/打字」延迟 ----
+  const humanizeCfg = deps.humanize || {};
+  const humanizeOn = humanizeCfg.enabled === true;
+  const minDelay = Math.max(0, Number(humanizeCfg.minDelayMs ?? 400));
+  const maxDelay = Math.max(minDelay, Number(humanizeCfg.maxDelayMs ?? 1800));
+  const maxBubbles = Math.max(1, Number(humanizeCfg.maxBubbles ?? 3));
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+  /** 按句子切成 1..maxBubbles 条；短的（≤60 字）不拆，拆开后拼回与原文一致 */
+  function splitBubbles(text, max = maxBubbles) {
+    const s = String(text ?? '').trim();
+    if (!s) return [];
+    if (s.length <= 60) return [s];
+    const parts = s.split(/(?<=[。！？!?～~…])/).map((p) => p.trim()).filter(Boolean);
+    if (parts.length <= 1) return [s];
+    const out = [];
+    let cur = '';
+    for (const p of parts) {
+      if (cur && (cur + p).length > 60) {
+        out.push(cur);
+        cur = p;
+      } else {
+        cur += p;
+      }
+    }
+    if (cur) out.push(cur);
+    if (out.length <= max) return out;
+    return [...out.slice(0, max - 1), out.slice(max - 1).join('')];
+  }
+
+  /** 发一条回复：分条 + 停顿（humanize 关闭时退回纯切条、零延迟） */
+  async function deliver(ctx, text, { at = false } = {}) {
+    const bubbles = humanizeOn ? splitBubbles(text) : splitMessage(text);
+    for (let i = 0; i < bubbles.length; i++) {
+      if (humanizeOn) {
+        const base = i === 0 ? minDelay : minDelay * 0.8;
+        const delay = Math.min(maxDelay, base + Math.min(bubbles[i].length, 80) * 12);
+        if (delay > 0) await sleep(delay);
+      }
+      if (i === 0 && at) await client.sendGroupMsgAt(ctx.groupId, ctx.userId, bubbles[i]);
+      else await client.sendGroupMsg(ctx.groupId, bubbles[i]);
     }
   }
 
@@ -1301,25 +1338,25 @@ export function createChatPlugin(deps) {
           // 模型自己判断「不接」：约定输出 <NO_REPLY>
           if (!reply || /^\s*<NO_REPLY>\s*$/i.test(reply)) return;
           const safe = isSensitive(reply) ? '这个话题我不太方便聊，我们换个话题吧~' : reply;
-          sendAutoReply(ctx, safe);
           noteSpoken(gid);
+          return deliver(ctx, safe).catch((e) => err(`[chat] 群 ${ctx.groupId} 接话发送失败:`, e.message));
         }).catch((e) => {
           busyGroups.delete(gid);
           err(`[chat] 群 ${ctx.groupId} 接话失败:`, e.message);
         });
         return true;
       }
-      brain.chat(ctx.groupId, ctx.userName, ctx.text, ctx.userId, { messageId: ctx.messageId, faces: ctx.faces })
+      brain.chat(ctx.groupId, ctx.userName, ctx.text, ctx.userId, {
+        messageId: ctx.messageId,
+        faces: ctx.faces,
+        recent: typeof getRecent === 'function' ? getRecent(ctx.groupId, 6, ctx.messageId) : [],
+      })
         .then(async (reply) => {
           if (!reply) return;
           // 风控降险：出站内容敏感词兜底——命中隐私/违禁关键词时替换为安全文案，不发送原文
           const safe = isSensitive(reply) ? '这个话题我不太方便聊，我们换个话题吧~' : reply;
-          // 超长回复分段发（QQ 单条有长度上限，超了会被拒发）：第一条真 @ 提问者（免 @ 群除外），其余纯文本
-          const parts = splitMessage(safe);
-          for (let i = 0; i < parts.length; i++) {
-            if (i === 0 && ctx.userId && !ctx.noAt) await client.sendGroupMsgAt(ctx.groupId, ctx.userId, parts[i]);
-            else await client.sendGroupMsg(ctx.groupId, parts[i]);
-          }
+          // 像真人打字：拆 1-3 条短消息 + 停顿；第一条按规则真 @（免 @ 群/关闭 replyAtUser 时纯文本）
+          await deliver(ctx, safe, { at: !!(ctx.userId && !ctx.noAt) });
         })
         .catch((e) => err(`[chat] 群 ${ctx.groupId} 发送失败:`, e.message));
       return true;

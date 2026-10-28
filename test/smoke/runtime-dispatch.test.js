@@ -96,7 +96,7 @@ function mkApp(cfgOverrides = {}, svcOverrides = {}) {
 
   const app = createApp({
     napcat: { wsUrl: 'ws://127.0.0.1:3001', selfId: 10001, accessToken: '' },
-    llm: {},
+    llm: { humanize: { minDelayMs: 0, maxDelayMs: 0 } }, // 测试关掉打字停顿（分条逻辑仍走）
     groups: [],
     minMessages: 1,
     includeSelf: false,

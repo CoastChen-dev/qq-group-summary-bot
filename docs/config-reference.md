@@ -82,6 +82,9 @@
 | `llm.chatConcurrency` | number | `3` | ChatBrain | LLM 请求并发上限（信号量） |
 | `llm.chatCooldownSeconds` | number | `3` | ChatBrain | 同一人的应答冷却秒数（窗口内再 @ 静默丢弃；0 = 不限） |
 | `llm.replyAtUser` | boolean | `false` | routing | 回复是否真 @ 提问者；默认 false（纯文本），true 恢复 @；免 @ 试点群无论此值都不 @ |
+| `llm.humanize.enabled` | boolean | `true` | chat 插件 | 像真人打字：把长回复拆成 1–3 条短消息并加打字停顿 |
+| `llm.humanize.minDelayMs` / `maxDelayMs` | number | `400` / `1800` | chat 插件 | 首条/条间停顿范围（按字数在范围内取值） |
+| `llm.humanize.maxBubbles` | number | `3` | chat 插件 | 单次回复最多拆几条 |
 | `llm.autoSpeak.groups` | array<number> | `[]` | routing + chat 插件 | 免 @ 自动接话的群号列表；空 = 所有群仍需 @。只走 chat，不触发指令；这些群回复一律不 @ 人 |
 | `llm.autoSpeak.window` | object | `{start:"07:00", end:"22:30"}` | routing | 自动接话时段（本地时间，支持跨零点）；窗口外该群恢复「必须 @ 才触发」，但回复仍不 @ 人；设为 `false` 关闭时段限制 |
 | `llm.autoSpeak.cooldownSeconds` | number | `60` | chat 插件 | 同群两次自动接话的最小间隔 |

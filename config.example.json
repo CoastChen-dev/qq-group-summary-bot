@@ -14,6 +14,12 @@
     "chatEnabled": true,
     "chatHistoryLimit": 12,
     "replyAtUser": false,
+    "humanize": {
+      "enabled": true,
+      "minDelayMs": 400,
+      "maxDelayMs": 1800,
+      "maxBubbles": 3
+    },
     "autoSpeak": {
       "groups": [],
       "window": { "start": "07:00", "end": "22:30" },
