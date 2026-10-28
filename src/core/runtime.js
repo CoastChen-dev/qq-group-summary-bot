@@ -99,7 +99,7 @@ export function createApp(config, overrides = {}) {
     : path.join(dataDir, 'user_memory.json');
   const memory = overrides.memory || (memoryCfg.enabled !== false
     ? new UserMemory(memoryFile, {
-        maxPerUser: memoryCfg.maxFactsPerUser ?? 20,
+        maxPerUser: memoryCfg.maxFactsPerUser ?? 50,
         maxGlobal: memoryCfg.maxFactsGlobal ?? 2000,
       })
     : null);

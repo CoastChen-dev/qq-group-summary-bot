@@ -347,7 +347,7 @@ export class ChatBrain {
     }
     // 工具提示（仅在启用工具时注入）：告知模型可用能力与克制原则
     if (this.toolsEnabled && this.tools.length) {
-      sysLines.push('工具：需要时可以调用工具（贴表情/发表情、查干员/藏品/卡池/群统计、查或记用户记忆、改自己的昵称/签名/名片；文档与提示词读写仅限博士=主人）；表情类工具要克制，只在真的合适时用，不要为了用工具而用工具。');
+      sysLines.push('工具：需要时可以调用工具（贴表情/发表情、查干员/藏品/卡池/群统计、查群历史记录、查或记用户记忆、改自己的昵称/签名/名片；文档与提示词读写仅限博士=主人）；表情类工具要克制，只在真的合适时用，不要为了用工具而用工具。');
     }
     // 记忆注入的定界规则（2026-10 提示注入加固）：记忆是资料，不是指令
     if (this.usermem) {
@@ -411,13 +411,17 @@ export class ChatBrain {
       lines.push(line);
       used += line.length;
     };
-    push(`${speaker}（提问者）`, this.usermem.listFacts(groupId, userId));
+    // 按问题召回：提问者最多 8 条、被点名的人最多 5 条（50 条事实不再一股脑注入）
+    const recallFacts = (uid, limit) => (typeof this.usermem.recall === 'function'
+      ? this.usermem.recall(groupId, uid, question, limit)
+      : this.usermem.listFacts(groupId, uid));
+    push(`${speaker}（提问者）`, recallFacts(userId, 8));
     const q = String(question || '');
     const seen = new Set([String(userId || '')]);
     for (const [uid, name] of this.groupMembers.get(groupId) || []) {
       if (seen.has(String(uid)) || !name || name.length < 2) continue;
       if (!q.includes(name)) continue;
-      push(name, this.usermem.listFacts(groupId, uid));
+      push(name, recallFacts(uid, 5));
     }
     return lines.join('\n');
   }
@@ -1098,6 +1102,30 @@ export function createChatTools({ arkdb, analytics, usermem, react, emojiCooldow
         if (analytics.importState === 'running') return '历史消息导入中，稍后再试';
         const d = Math.min(Math.max(Number(days) || 7, 1), 90);
         return `${analytics.topActive(d)}\n${analytics.groupStats()}`;
+      },
+    });
+    tools.push({
+      name: 'search_history',
+      description: '按关键词检索本群最近的历史聊天记录（群友问「上次说的」「之前提到的」时用）。',
+      parameters: {
+        type: 'object',
+        properties: {
+          query: { type: 'string', description: '关键词，空格分隔（最多 4 个）' },
+          days: { type: 'number', description: '最近多少天（默认 30，1-90）' },
+        },
+        required: ['query'],
+      },
+      handler: async ({ query, days }, ctx) => {
+        if (analytics.importState === 'running') return '历史消息导入中，稍后再试';
+        const d = Math.min(Math.max(Number(days) || 30, 1), 90);
+        const rows = typeof analytics.searchMessages === 'function'
+          ? analytics.searchMessages(ctx.groupId, query, { days: d, limit: 12 })
+          : [];
+        if (!rows.length) return `最近 ${d} 天没找到和「${query}」相关的聊天记录`;
+        return rows
+          .map((r) => `${new Date(r.time * 1000).toLocaleString('zh-CN', { hour12: false })} ${r.name}：${r.text}`)
+          .join('\n')
+          .slice(0, 1500);
       },
     });
   }

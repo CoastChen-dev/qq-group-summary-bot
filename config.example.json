@@ -96,7 +96,7 @@
     "enabled": true,
     "file": "./data/user_memory.json",
     "autoExtract": true,
-    "maxFactsPerUser": 20,
+    "maxFactsPerUser": 50,
     "maxFactsGlobal": 2000,
     "episodicDays": 3
   },

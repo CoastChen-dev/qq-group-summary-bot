@@ -98,6 +98,40 @@ describe('UserMemory 查询与管理', () => {
   });
 });
 
+describe('UserMemory 长期记忆升级（2026-10）', () => {
+  it('相似事实合并：保留更长文本、重要性取高', (t) => {
+    const { mem } = makeMem();
+    mem.setFact('g1', 'u1', '张三', '在玩明日方舟', 'auto');
+    const r = mem.setFact('g1', 'u1', '张三', '最近在玩明日方舟', 'manual');
+    assert.equal(r.merged, true);
+    const facts = mem.listFacts('g1', 'u1');
+    assert.equal(facts.length, 1);
+    assert.equal(facts[0].text, '最近在玩明日方舟'); // 更长的那条留下
+    assert.equal(facts[0].imp, 3); // 手动 + 身份类关键词
+  });
+
+  it('recall：按问题相关性召回，并刷新 lastUsed', (t) => {
+    const { mem } = makeMem();
+    mem.setFact('g1', 'u1', '张三', '喜欢夜莺', 'manual');
+    mem.setFact('g1', 'u1', '张三', '在医疗部工作', 'auto');
+    mem.setFact('g1', 'u1', '张三', '养了一只猫', 'auto');
+    const got = mem.recall('g1', 'u1', '夜莺怎么样', 2);
+    assert.equal(got.length, 2);
+    assert.equal(got[0].text, '喜欢夜莺');
+    assert.ok(got[0].lastUsed > 0);
+  });
+
+  it('每人上限默认 50：超限先丢低重要性/最久未用', (t) => {
+    const { mem } = makeMem();
+    for (let i = 0; i < 50; i++) mem.setFact('g1', 'u1', '张三', `记忆${String.fromCharCode(0x4e00 + i)}`, 'auto');
+    mem.setFact('g1', 'u1', '张三', '手动记下的重要偏好', 'manual');
+    const facts = mem.listFacts('g1', 'u1');
+    assert.equal(facts.length, 50);
+    assert.ok(facts.some((f) => f.text === '手动记下的重要偏好'));
+    assert.equal(facts.filter((f) => f.text.startsWith('记忆')).length, 49);
+  });
+});
+
 describe('UserMemory 提示注入加固（2026-10）', () => {
   it('sanitizeFact：换行/控制字符压成单行，去掉【】伪块标记', () => {
     assert.equal(sanitizeFact('喜欢夜莺\n也喜欢德克萨斯'), '喜欢夜莺 也喜欢德克萨斯');

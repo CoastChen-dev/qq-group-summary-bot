@@ -237,7 +237,7 @@ describe('createApp 全链（P3 五插件装配面）', () => {
   it('工具装配：createApp 为 ChatBrain 注入工具表（贴表情/查询/记忆）', () => {
     const { app } = mkApp({}, { brain: null }); // 走真实 ChatBrain（构造零网络副作用）
     const names = app.services.brain.tools.map((t) => t.name);
-    assert.deepEqual(names, ['react_emoji', 'send_face', 'query_operator', 'query_relic', 'query_gacha', 'query_group_stats', 'query_user_memory', 'remember', 'set_nickname', 'set_signature', 'set_group_card', 'read_text_file', 'write_text_file']);
+    assert.deepEqual(names, ['react_emoji', 'send_face', 'query_operator', 'query_relic', 'query_gacha', 'query_group_stats', 'search_history', 'query_user_memory', 'remember', 'set_nickname', 'set_signature', 'set_group_card', 'read_text_file', 'write_text_file']);
     assert.equal(app.services.brain.toolsEnabled, true);
   });
 

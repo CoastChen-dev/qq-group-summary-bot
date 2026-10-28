@@ -156,6 +156,24 @@ describe('ChatBrain buildMessages 实名上下文与用户记忆', () => {
     assert.ok(user.content.includes('小王在玩方舟'));
   });
 
+  it('search_history 工具：调用 analytics.searchMessages 并格式化', async () => {
+    let seen = null;
+    const tools = createChatTools({
+      analytics: {
+        importState: 'done',
+        searchMessages: (gid, q, opts) => {
+          seen = { gid, q, opts };
+          return [{ time: 1700000000, name: '甲', text: '上次说的方舟活动' }];
+        },
+      },
+    });
+    const t = tools.find((x) => x.name === 'search_history');
+    assert.ok(t, '应注册 search_history 工具');
+    const out = await t.handler({ query: '方舟', days: 7 }, { groupId: 1 });
+    assert.deepEqual(seen, { gid: 1, q: '方舟', opts: { days: 7, limit: 12 } });
+    assert.match(out, /甲：上次说的方舟活动/);
+  });
+
   it('_parseFacts：容忍 markdown 包裹/前后缀；非数组与坏 JSON 返回空', () => {
     const brain = new ChatBrain({ cfg: {} });
     assert.deepEqual(brain._parseFacts('```json\n["喜欢夜莺", "在医疗部工作"]\n```'), ['喜欢夜莺', '在医疗部工作']);

@@ -47,7 +47,7 @@
 | `memory.enabled` | boolean | `true` | runtime（UserMemory 装配）+ memory 插件 + ChatBrain | 用户记忆总开关；false 时不加载不注入、指令回「记忆功能未启用」 |
 | `memory.file` | string | `<root>/data/user_memory.json` | UserMemory（core/platform/usermem.js） | 记忆文件路径（相对路径按项目根解析） |
 | `memory.autoExtract` | boolean | `true` | ChatBrain（_extractMemory） | 对话后自动提取记忆（`!== false` 视为开；每次回复多一次小 LLM 调用） |
-| `memory.maxFactsPerUser` / `memory.maxFactsGlobal` | number | `20` / `2000` | UserMemory | 每人 / 全局事实上限，超限丢最旧 |
+| `memory.maxFactsPerUser` / `memory.maxFactsGlobal` | number | `50` / `2000` | UserMemory | 每人 / 全局事实上限；超限先丢「重要性低、最久未用」的事实 |
 | `memory.episodicDays` | number | `3` | EpisodicMemory（core/platform/episodic.js） | 注入 prompt 的「最近几天群里的事」天数；日报后提炼并写 `data/memory/<群号>/<日期>.json` |
 | `webSearch.enabled` | boolean | `true`（有 key 才生效） | WebSearchRetriever（core/knowledge/websearch.js） | 联网搜索开关；`apiKey` 为空且 provider 非 `deepseek` 时自动禁用并回落萌娘/维基 |
 | `webSearch.provider` | string | `deepseek` | WebSearchRetriever | 搜索平台：`deepseek`（官方 Search API，复用 `llm.apiKey`）/ `zhipu`（智谱）/ `bocha`（博查） |

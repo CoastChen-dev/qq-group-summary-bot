@@ -217,6 +217,30 @@ export class Analytics {
   }
 
   /**
+   * 关键词检索群历史消息（「上次说的…」用；按时间倒序）。
+   * @param {string|number} groupId - 群号
+   * @param {string} query - 关键词（空白分隔，最多 4 个，OR 匹配）
+   * @param {{days?: number, limit?: number}} [opts={}] - 最近天数（1-365，默认 30）与条数（1-50，默认 20）
+   * @returns {Array<{time: number, name: string, text: string}>} 命中消息（时间倒序）；异常/无命中返回 []
+   */
+  searchMessages(groupId, query, { days = 30, limit = 20 } = {}) {
+    const kws = String(query || '').trim().split(/\s+/).filter(Boolean).slice(0, 4);
+    if (!kws.length) return [];
+    const since = Math.floor(Date.now() / 1000) - Math.max(1, Math.min(365, days)) * 86400;
+    const esc = (s) => s.replace(/[\\%_]/g, (m) => `\\${m}`);
+    const where = kws.map(() => "text LIKE ? ESCAPE '\\'").join(' OR ');
+    try {
+      return this.db.prepare(
+        `SELECT time, name, text FROM messages
+         WHERE group_id = ? AND time >= ? AND (${where})
+         ORDER BY time DESC LIMIT ?`
+      ).all(String(groupId), since, ...kws.map((k) => `%${esc(k)}%`), Math.max(1, Math.min(50, limit)));
+    } catch {
+      return [];
+    }
+  }
+
+  /**
    * 「群消息统计」文案（群内指令输出，可直接发；指令插件调用）。
    * 按群消息量降序，附每群总数与最近活跃距今天数。
    * @returns {string} 统计文案；库内无任何记录时返回 '暂无消息统计'

@@ -48,6 +48,39 @@ export function sanitizeFact(text) {
     .trim();
 }
 
+// 身份/偏好类关键词：命中时事实重要性 +1（长期有用，优先保留/召回）
+const IDENTITY_HINT = /生日|喜欢|爱玩|在玩|玩|住|工作|上学|养|本命|厨|讨厌|名字|叫/;
+
+/**
+ * 事实重要性 1–3：手动记的 3，自动提取的 2；身份/偏好类 +1（封顶 3）。
+ * @param {string} text - 事实文本
+ * @param {'manual'|'auto'} [src='auto'] - 来源
+ * @returns {number} 1–3
+ */
+function importanceOf(text, src = 'auto') {
+  let imp = src === 'manual' ? 3 : 2;
+  if (IDENTITY_HINT.test(String(text ?? ''))) imp = Math.min(3, imp + 1);
+  return imp;
+}
+
+// 中文 bigram 集合（相似事实合并用）
+function bigrams(text) {
+  const s = String(text ?? '').toLowerCase().replace(/\s+/g, '');
+  const out = new Set();
+  for (let i = 0; i < s.length - 1; i++) out.add(s.slice(i, i + 2));
+  return out;
+}
+
+// Dice 相似度 0–1
+function dice(a, b) {
+  const A = bigrams(a);
+  const B = bigrams(b);
+  if (!A.size || !B.size) return 0;
+  let inter = 0;
+  for (const x of A) if (B.has(x)) inter++;
+  return (2 * inter) / (A.size + B.size);
+}
+
 /**
  * 用户记忆库：按「群 → 用户 → 事实列表」组织，写操作全量落盘（与 LingoStore 同惯例）。
  */
@@ -55,10 +88,10 @@ export class UserMemory {
   /**
    * @param {string} file - 记忆文件绝对路径（runtime 已解析；测试可注入 tmp 路径）
    * @param {Object} [opts={}] - 容量配置
-   * @param {number} [opts.maxPerUser=20] - 每人事实上限（超限丢最旧）
-   * @param {number} [opts.maxGlobal=2000] - 全局事实上限（超限全局丢最旧）
+   * @param {number} [opts.maxPerUser=50] - 每人事实上限（超限先丢低重要性/最久未用的）
+   * @param {number} [opts.maxGlobal=2000] - 全局事实上限（超限全局丢最低分）
    */
-  constructor(file, { maxPerUser = 20, maxGlobal = 2000 } = {}) {
+  constructor(file, { maxPerUser = 50, maxGlobal = 2000 } = {}) {
     this.file = file;
     this.maxPerUser = maxPerUser;
     this.maxGlobal = maxGlobal;
@@ -77,7 +110,15 @@ export class UserMemory {
           g.set(uid, {
             name: u.name || '',
             updatedAt: u.updatedAt || 0,
-            facts: Array.isArray(u.facts) ? u.facts.filter((f) => f && typeof f.text === 'string') : [],
+            facts: Array.isArray(u.facts)
+              ? u.facts.filter((f) => f && typeof f.text === 'string').map((f) => ({
+                  text: f.text,
+                  at: Number(f.at) || 0,
+                  src: f.src === 'manual' ? 'manual' : 'auto',
+                  imp: Math.min(3, Math.max(1, Number(f.imp) || importanceOf(f.text, f.src))),
+                  lastUsed: Number(f.lastUsed) || 0,
+                }))
+              : [],
           });
         }
         this.groups.set(gid, g);
@@ -128,14 +169,14 @@ export class UserMemory {
   }
 
   /**
-   * 添加一条事实（同文重复 → 只刷新时间并标记 dup；超限触发容量淘汰）。
+   * 添加一条事实（同文/高度相似 → 只刷新时间并合并；超限按重要性淘汰）。
    * 写入前清洗（单行、去【】伪块标记）并拒收指令式内容——记忆只存资料，防提示注入。
    * @param {string|number} groupId - 群号（按群隔离的键）
    * @param {string|number} userId - 用户 QQ
    * @param {string} name - 用户昵称（更新最近称呼）
    * @param {string} text - 事实文本（清洗后 <2 字或像指令则拒收；存储截断 60 字）
-   * @param {'manual'|'auto'} [src='manual'] - 来源
-   * @returns {{ok: boolean, dup?: boolean, reason?: string}} 结果；拒收时 reason 说明原因
+   * @param {'manual'|'auto'} [src='manual'] - 来源（手动记的重要性更高）
+   * @returns {{ok: boolean, dup?: boolean, merged?: boolean, reason?: string}} 结果
    * 副作用：内存更新 + 落盘
    */
   setFact(groupId, userId, name, text, src = 'manual') {
@@ -146,16 +187,37 @@ export class UserMemory {
     const u = this._user(groupId, userId, true);
     if (name) u.name = String(name);
     const now = Math.floor(Date.now() / 1000);
-    const dup = u.facts.find((f) => f.text === t);
-    if (dup) {
-      dup.at = now;
+    const imp = importanceOf(t, src);
+
+    const same = u.facts.find((f) => f.text === t);
+    if (same) {
+      same.at = now;
+      same.imp = Math.max(same.imp || 1, imp);
+      if (src === 'manual') same.src = 'manual';
       u.updatedAt = now;
       this._save();
       return { ok: true, dup: true };
     }
-    u.facts.push({ text: t.slice(0, 60), at: now, src });
+
+    // 相似事实合并（如「在玩明日方舟」与「最近在玩明日方舟」）：保留信息量更大的那条
+    const near = u.facts.find((f) => dice(f.text, t) >= 0.7);
+    if (near) {
+      if (t.length > near.text.length) near.text = t;
+      near.at = now;
+      near.imp = Math.max(near.imp || 1, imp);
+      if (src === 'manual') near.src = 'manual';
+      u.updatedAt = now;
+      this._save();
+      return { ok: true, merged: true };
+    }
+
+    u.facts.push({ text: t, at: now, src, imp, lastUsed: 0 });
     u.updatedAt = now;
-    if (u.facts.length > this.maxPerUser) u.facts.splice(0, u.facts.length - this.maxPerUser);
+    // 超上限：先丢重要性最低、最久未用的
+    if (u.facts.length > this.maxPerUser) {
+      u.facts.sort((a, b) => ((a.imp || 1) - (b.imp || 1)) || ((a.lastUsed || a.at || 0) - (b.lastUsed || b.at || 0)));
+      u.facts.splice(0, u.facts.length - this.maxPerUser);
+    }
     this._enforceGlobalCap();
     this._save();
     return { ok: true, dup: false };
@@ -170,6 +232,38 @@ export class UserMemory {
   listFacts(groupId, userId) {
     const u = this._user(groupId, userId, false);
     return u ? u.facts.map((f) => ({ ...f })) : [];
+  }
+
+  /**
+   * 按当前问题召回最相关的事实（重要性 + 关键词重合 + 近用时间），并刷新 lastUsed。
+   * 聊天注入优先用它，避免 50 条事实一股脑塞进 prompt。
+   * @param {string|number} groupId - 群号
+   * @param {string|number} userId - 用户 QQ
+   * @param {string} [question=''] - 当前问题（空则按重要性/近用排序）
+   * @param {number} [limit=8] - 最多返回几条
+   * @returns {Array<{text: string, at: number, src: string, imp: number, lastUsed: number}>} 事实副本
+   * 副作用：被召回的事实 lastUsed 更新并落盘
+   */
+  recall(groupId, userId, question = '', limit = 8) {
+    const u = this._user(groupId, userId, false);
+    if (!u || !u.facts.length) return [];
+    const qGrams = bigrams(question);
+    const now = Math.floor(Date.now() / 1000);
+    const scored = u.facts.map((f) => {
+      let overlap = 0;
+      if (qGrams.size) {
+        const fg = bigrams(f.text);
+        for (const g of qGrams) if (fg.has(g)) overlap++;
+      }
+      const ageDays = Math.max(0, (now - (f.lastUsed || f.at || now)) / 86400);
+      const recency = ageDays < 7 ? 2 : ageDays < 30 ? 1 : 0;
+      return { f, score: (f.imp || 1) * 10 + overlap * 4 + recency };
+    }).sort((a, b) => b.score - a.score).slice(0, Math.max(1, limit));
+
+    const picked = scored.map((x) => x.f);
+    for (const f of picked) f.lastUsed = now;
+    if (picked.length) this._save();
+    return picked.map((f) => ({ ...f }));
   }
 
   /**
@@ -262,15 +356,16 @@ export class UserMemory {
     return n;
   }
 
-  // 全局容量淘汰：反复找全局 at 最小的事实删除，直到 ≤ maxGlobal（事实量级小，线性扫描足够）
+  // 全局容量淘汰：反复找「重要性最低、最久未用」的事实删除，直到 ≤ maxGlobal（事实量级小，线性扫描足够）
   _enforceGlobalCap() {
     while (this.countFacts() > this.maxGlobal) {
       let target = null;
       for (const [gid, users] of this.groups) {
         for (const [uid, u] of users) {
           for (let i = 0; i < u.facts.length; i++) {
-            const at = u.facts[i].at || 0;
-            if (!target || at < target.at) target = { gid, uid, i, at };
+            const f = u.facts[i];
+            const score = (f.imp || 1) * 1e9 + (f.lastUsed || f.at || 0);
+            if (!target || score < target.score) target = { gid, uid, i, score };
           }
         }
       }

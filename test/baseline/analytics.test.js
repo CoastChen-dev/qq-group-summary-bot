@@ -250,6 +250,25 @@ describe('抽卡记录（pulls 表）', () => {
   });
 });
 
+describe('searchMessages 关键词检索', () => {
+  it('按关键词 OR 匹配、时间倒序；窗口/limit 生效，空词与无命中返回 []', () => {
+    const { analytics } = makeAnalytics();
+    recNow(analytics, 1, { text: '上次说的方舟活动是危机合约', agoSec: 10 });
+    recNow(analytics, 1, { text: '今天吃了吗', agoSec: 5 });
+    recNow(analytics, 2, { text: '方舟活动', agoSec: 1 });
+
+    const rows = analytics.searchMessages(1, '方舟', { days: 1, limit: 10 });
+    assert.equal(rows.length, 1);
+    assert.match(rows[0].text, /方舟活动/);
+
+    recNow(analytics, 1, { text: '方舟 二', agoSec: 1 });
+    assert.equal(analytics.searchMessages(1, '方舟', { limit: 1 }).length, 1); // limit 生效
+    assert.deepEqual(analytics.searchMessages(1, '   '), []);
+    assert.deepEqual(analytics.searchMessages(1, '不存在的词'), []);
+    assert.deepEqual(analytics.searchMessages(1, '%'), []); // LIKE 通配符转义，不误命中
+  });
+});
+
 describe('容错（锁定已知行为）', () => {
   it('库文件损坏：构造即抛（现状：进程启动崩溃，勿降级成静默）', (t) => {
     const dir = makeTmp();
