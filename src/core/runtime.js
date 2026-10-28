@@ -112,7 +112,10 @@ export function createApp(config, overrides = {}) {
   const wiki = overrides.wiki || new WikiRetriever(llm);
   const moegirl = overrides.moegirl || new MoegirlRetriever(llm);
   const wikipedia = overrides.wikipedia || new WikipediaRetriever(llm);
-  const webSearch = overrides.webSearch || new WebSearchRetriever(config.webSearch || {});
+  const webSearchCfg = { ...(config.webSearch || {}) };
+  // DeepSeek 官方 Search API 复用 llm.apiKey（无需另配 webSearch.apiKey）
+  if (webSearchCfg.provider === 'deepseek' && !webSearchCfg.apiKey) webSearchCfg.apiKey = llm.apiKey;
+  const webSearch = overrides.webSearch || new WebSearchRetriever(webSearchCfg);
   // 贴表情开关（emojiLike.*，默认开）：开启时给 LLM 注册 react_emoji 工具（模型决定贴不贴/贴哪个）
   const emojiLikeEnabled = config.emojiLike?.enabled !== false;
   // LLM 工具表（function calling，config.tools.enabled 默认开）：只读查询 + 贴表情 + 写记忆；

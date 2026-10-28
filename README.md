@@ -39,7 +39,7 @@
 本地梗词典 → 知识缓存（TTL 168h）→ 联网检索（PRTS.Wiki / 联网搜索 / 萌娘百科 / 维基百科），按来源可信度与热度评分排序。
 
 - **检索门提速**：闲聊消息跳过联网检索直接回复，提问才检索（`llm.retrievalGate`）
-- **联网搜索**：配置 `webSearch.apiKey`（智谱/博查）后取代百科源，检索更实时、少依赖萌娘/维基
+- **联网搜索**：默认用 DeepSeek 官方 Search API（`webSearch.provider: "deepseek"`，复用 `llm.apiKey`，无需额外 key）；也可切 `zhipu` / `bocha` 并配 `webSearch.apiKey`。启用后取代百科源，检索更实时
 - **群友教词典**：`学习 词=释义` / `忘记 词` / `查词 词` / `词典`
 
 ### 游戏控制（MAA，可选，仅主人）
@@ -101,7 +101,7 @@ cp config.example.json config.json   # 复制模板后按需修改
 - `report.userId`：日报私聊接收人（不填不发日报）
 - `groups`：监控群白名单，`[]` = 全部群
 
-常用开关：`llm.chatEnabled`（AI 群聊）、`quiet`（静默时段）、`tools.enabled`（工具调用）、`emojiLike.enabled`（贴表情）、`memory.enabled`（用户记忆）、`webSearch.apiKey`（联网搜索）、`owner.userId`（主人：文档/提示词编辑权限）、`webui.enabled`（管理面板）。完整键表见 [docs/config-reference.md](docs/config-reference.md)。
+常用开关：`llm.chatEnabled`（AI 群聊）、`quiet`（静默时段）、`tools.enabled`（工具调用）、`emojiLike.enabled`（贴表情）、`memory.enabled`（用户记忆）、`webSearch.provider`（联网搜索源，默认 deepseek）、`owner.userId`（主人：文档/提示词编辑权限）、`webui.enabled`（管理面板）。完整键表见 [docs/config-reference.md](docs/config-reference.md)。
 
 ### 3. 本地干员数据库（可选，强烈推荐）
 

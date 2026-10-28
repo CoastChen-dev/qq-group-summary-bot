@@ -52,6 +52,26 @@ describe('WebSearchRetriever', () => {
     assert.deepEqual(out.sources, ['标题A']);
   });
 
+  it('deepseek：/v1/tools/search 请求形状与 results 解析（summary 优先、截 300 字）', async () => {
+    let seen = null;
+    const stub = async (url, opts) => {
+      seen = { url, body: JSON.parse(opts.body), auth: opts.headers.Authorization };
+      return new Response(JSON.stringify({ results: [
+        { title: '水月肉鸽攻略', url: 'https://d.example', summary: '长摘要'.repeat(200), snippet: '短摘要' },
+        { title: '', url: '', summary: '无标题' },
+      ] }), { status: 200 });
+    };
+    const r = new WebSearchRetriever({ provider: 'deepseek', apiKey: 'ds', count: 3 });
+    const out = await withFetch(stub, () => r.retrieve('水月肉鸽怎么打'));
+    assert.equal(seen.url, 'https://api.deepseek.com/v1/tools/search');
+    assert.deepEqual(seen.body, { query: '水月肉鸽怎么打', count: 3, need_content: false });
+    assert.equal(seen.auth, 'Bearer ds');
+    assert.ok(out.context.startsWith('【联网搜索】'));
+    assert.ok(out.context.includes('水月肉鸽攻略'));
+    assert.deepEqual(out.sources, ['水月肉鸽攻略']);
+    assert.ok(out.context.length < 400); // summary 截到 300 字，不把整段 800 字塞进上下文
+  });
+
   it('bocha：data.webPages.value 解析', async () => {
     let seenUrl = '';
     const stub = async (url) => {

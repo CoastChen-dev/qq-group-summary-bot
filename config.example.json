@@ -64,7 +64,7 @@
   },
   "webSearch": {
     "enabled": true,
-    "provider": "zhipu",
+    "provider": "deepseek",
     "apiKey": "",
     "count": 5
   },

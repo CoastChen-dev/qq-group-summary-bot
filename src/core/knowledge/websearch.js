@@ -6,6 +6,8 @@
  * 支持 provider（config.webSearch.provider）：
  *   - zhipu：智谱 Web Search API（https://open.bigmodel.cn/api/paas/v4/web_search，0.01 元/次起）
  *   - bocha：博查 Web Search API（https://api.bochaai.com/v1/web-search）
+ *   - deepseek：DeepSeek 官方 Search API（https://api.deepseek.com/v1/tools/search，$0.75/1000 次；
+ *     未单独配 webSearch.apiKey 时由 runtime 复用 llm.apiKey）
  * 启用条件：config.webSearch.enabled !== false 且 apiKey 非空（缺 key 自动禁用，回落百科源）。
  * 依赖：core/platform/http.js fetchRetry、logger；实例化点：core/runtime.js 装配为共享单例。
  * 读写数据：只读网络；失败/超时返回空结果（不抛错，ChatBrain 按空处理）。
@@ -32,6 +34,17 @@ const PROVIDERS = {
       snippet: String(r.summary || r.snippet || ''),
     })),
   },
+  // DeepSeek 官方 Search API（2026-10 上线）：/v1/tools/search，按成功请求计费。
+  // summary 是给模型读的长摘要（约 600–800 字），截到 300 字控制上下文体积；无标题条目过滤。
+  deepseek: {
+    url: 'https://api.deepseek.com/v1/tools/search',
+    body: (query, count) => ({ query: String(query).slice(0, 128), count, need_content: false }),
+    parse: (data, count) => (data?.results || []).slice(0, count).map((r) => ({
+      title: r.title || '',
+      url: r.url || '',
+      snippet: String(r.summary || r.snippet || '').slice(0, 300),
+    })),
+  },
 };
 
 /**
@@ -41,7 +54,7 @@ export class WebSearchRetriever {
   /**
    * @param {Object} [cfg={}] - config.webSearch 子集
    * @param {boolean} [cfg.enabled=true] - 开关（!== false 视为开）；apiKey 为空时仍自动禁用
-   * @param {string} [cfg.provider='zhipu'] - 搜索平台（zhipu | bocha）
+   * @param {string} [cfg.provider='zhipu'] - 搜索平台（zhipu | bocha | deepseek）
    * @param {string} [cfg.apiKey=''] - 平台 API Key（必填才启用）
    * @param {number} [cfg.count=5] - 结果条数（1–10）
    * @param {number} [cfg.timeoutMs=5000] - 单次搜索超时（毫秒）
