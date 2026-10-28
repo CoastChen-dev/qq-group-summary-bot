@@ -29,16 +29,29 @@ describe('EpisodicMemory', () => {
     assert.deepEqual(e.recent('g1', 1).map((x) => x.date), ['2026-10-27']);
   });
 
-  it('format：带 MM-DD、超长截断；没有记忆返回空串', () => {
+  it('format：带 MM-DD 与相对时间、超长截断；没有记忆返回空串', () => {
     const e = mk({ days: 3, maxChars: 500 });
+    const day = (n) => new Date(Date.now() - n * 86400000).toISOString().slice(0, 10);
     assert.equal(e.format('g1'), '');
-    e.save('g1', '2026-10-26', ['小王在玩方舟']);
-    e.save('g1', '2026-10-27', ['群里约好周六开黑', '阿米娅喜欢甜食']);
+    e.save('g1', day(2), ['小王在玩方舟']);
+    e.save('g1', day(1), ['群里约好周六开黑', '阿米娅喜欢甜食']);
     const text = e.format('g1');
-    assert.match(text, /10-26：小王在玩方舟/);
-    assert.match(text, /10-27：群里约好周六开黑；阿米娅喜欢甜食/);
+    assert.match(text, /（2天前）：小王在玩方舟/);
+    assert.match(text, /（昨天）：群里约好周六开黑；阿米娅喜欢甜食/);
     const short = e.format('g1', 3, 12);
     assert.ok(short.length <= 13 && short.endsWith('…'));
+  });
+
+  it('保留窗口：超过 retentionDays 的旧文件删除', () => {
+    const dir = makeTmp();
+    const e = new EpisodicMemory(dir, { retentionDays: 30 });
+    const old = '2026-01-01';
+    fs.mkdirSync(path.join(dir, 'g1'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'g1', `${old}.json`), JSON.stringify({ date: old, items: ['旧记忆'] }));
+    const today = new Date().toISOString().slice(0, 10);
+    e.save('g1', today, ['新记忆']);
+    assert.equal(fs.existsSync(path.join(dir, 'g1', `${old}.json`)), false);
+    assert.equal(fs.existsSync(path.join(dir, 'g1', `${today}.json`)), true);
   });
 
   it('脏数据：空条目/超短/损坏文件都不影响其余记忆', () => {

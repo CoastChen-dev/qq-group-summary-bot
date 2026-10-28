@@ -21,11 +21,13 @@ export class EpisodicMemory {
    * @param {Object} [opts={}]
    * @param {number} [opts.days=3] - 默认注入最近几天的记忆
    * @param {number} [opts.maxChars=500] - 注入总长上限
+   * @param {number} [opts.retentionDays=30] - 磁盘上保留多少天（更早的删除，像人会淡忘久远的细节）
    */
-  constructor(dir, { days = 3, maxChars = 500 } = {}) {
+  constructor(dir, { days = 3, maxChars = 500, retentionDays = 30 } = {}) {
     this.dir = dir;
     this.days = Math.max(0, Number(days) || 0);
     this.maxChars = Math.max(0, Number(maxChars) || 0);
+    this.retentionDays = Math.max(1, Number(retentionDays) || 30);
   }
 
   _groupDir(gid) {
@@ -54,10 +56,28 @@ export class EpisodicMemory {
       fs.writeFileSync(this._file(gid, date), JSON.stringify({
         date, items: list, generatedAt: Math.floor(Date.now() / 1000),
       }));
+      this._pruneOld(gid);
       return true;
     } catch (e) {
       log(`[episodic] 群 ${gid} 记忆写盘失败: ${e.message}`);
       return false;
+    }
+  }
+
+  // 删除超过 retentionDays 的旧记忆文件（按文件名日期比较；失败忽略）
+  _pruneOld(gid) {
+    const cutoff = new Date(Date.now() - this.retentionDays * 86400000).toISOString().slice(0, 10);
+    let files = [];
+    try {
+      files = fs.readdirSync(this._groupDir(gid));
+    } catch {
+      return;
+    }
+    for (const f of files) {
+      const m = /^(\d{4}-\d{2}-\d{2})\.json$/.exec(f);
+      if (m && m[1] < cutoff) {
+        try { fs.rmSync(path.join(this._groupDir(gid), f), { force: true }); } catch { /* 忽略 */ }
+      }
     }
   }
 
@@ -95,7 +115,16 @@ export class EpisodicMemory {
   format(gid, days = this.days, maxChars = this.maxChars) {
     const entries = this.recent(gid, days);
     if (!entries.length) return '';
-    const lines = entries.map((e) => `- ${e.date.slice(5)}：${e.items.join('；')}`);
+    // 带上相对时间（今天/昨天/N 天前），让「记忆随时间变淡」在 prompt 里可见
+    const now = new Date();
+    const base = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+    const dayMs = 86400000;
+    const lines = entries.map((e) => {
+      const t = new Date(`${e.date}T00:00:00`).getTime();
+      const diff = Number.isFinite(t) ? Math.round((base - t) / dayMs) : 0;
+      const rel = diff <= 0 ? '今天' : diff === 1 ? '昨天' : `${diff}天前`;
+      return `- ${e.date.slice(5)}（${rel}）：${e.items.join('；')}`;
+    });
     let text = lines.join('\n');
     if (maxChars > 0 && text.length > maxChars) text = text.slice(0, maxChars) + '…';
     return text;

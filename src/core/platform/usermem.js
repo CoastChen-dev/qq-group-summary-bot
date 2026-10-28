@@ -87,14 +87,18 @@ function dice(a, b) {
 export class UserMemory {
   /**
    * @param {string} file - 记忆文件绝对路径（runtime 已解析；测试可注入 tmp 路径）
-   * @param {Object} [opts={}] - 容量配置
+   * @param {Object} [opts={}] - 容量与遗忘配置
    * @param {number} [opts.maxPerUser=50] - 每人事实上限（超限先丢低重要性/最久未用的）
    * @param {number} [opts.maxGlobal=2000] - 全局事实上限（超限全局丢最低分）
+   * @param {number} [opts.forgetDays=120] - 自动提取的低重要性事实多久没再用就淡忘（手动记的永不删）
+   * @param {number} [opts.halfLifeDays=120] - 记忆强度半衰期（天）：越久没提越弱
    */
-  constructor(file, { maxPerUser = 50, maxGlobal = 2000 } = {}) {
+  constructor(file, { maxPerUser = 50, maxGlobal = 2000, forgetDays = 120, halfLifeDays = 120 } = {}) {
     this.file = file;
     this.maxPerUser = maxPerUser;
     this.maxGlobal = maxGlobal;
+    this.forgetDays = Math.max(1, Number(forgetDays) || 120);
+    this.halfLifeDays = Math.max(1, Number(halfLifeDays) || 120);
     this.groups = new Map(); // 群号(String) -> Map(QQ(String) -> {name, updatedAt, facts})
     this._load();
   }
@@ -117,6 +121,8 @@ export class UserMemory {
                   src: f.src === 'manual' ? 'manual' : 'auto',
                   imp: Math.min(3, Math.max(1, Number(f.imp) || importanceOf(f.text, f.src))),
                   lastUsed: Number(f.lastUsed) || 0,
+                  recalls: Number(f.recalls) || 0,
+                  strength: Math.min(1, Math.max(0.05, Number(f.strength) || (Number(f.imp) || importanceOf(f.text, f.src)) / 3)),
                 }))
               : [],
           });
@@ -124,9 +130,40 @@ export class UserMemory {
         this.groups.set(gid, g);
       }
       log(`[usermem] 已加载用户记忆：${this.countUsers()} 人 / ${this.countFacts()} 条`);
+      const pruned = this._pruneFaded();
+      if (pruned > 0) {
+        log(`[usermem] 淡忘 ${pruned} 条长期未用的自动记忆`);
+        this._save();
+      }
     } catch (e) {
       log(`[usermem] 记忆文件加载失败: ${e.message}`);
     }
+  }
+
+  // 记忆强度随时间衰减：strength × exp(-ageDays / halfLifeDays)
+  _effective(f, now = Math.floor(Date.now() / 1000)) {
+    const ageDays = Math.max(0, (now - (f.lastUsed || f.at || now)) / 86400);
+    return (f.strength || 0.5) * Math.exp(-ageDays / this.halfLifeDays);
+  }
+
+  // 淡忘：自动提取的低重要性事实，超过 forgetDays 没被用到就从库里删掉（手动记的永不删）
+  _pruneFaded() {
+    const now = Math.floor(Date.now() / 1000);
+    let removed = 0;
+    for (const [gid, users] of this.groups) {
+      for (const [uid, u] of users) {
+        const keep = u.facts.filter((f) => {
+          const ageDays = (now - (f.lastUsed || f.at || now)) / 86400;
+          const faded = f.src !== 'manual' && (f.imp || 1) <= 2 && ageDays > this.forgetDays;
+          if (faded) removed++;
+          return !faded;
+        });
+        if (keep.length !== u.facts.length) u.facts = keep;
+        if (!u.facts.length) users.delete(uid);
+      }
+      if (!users.size) this.groups.delete(gid);
+    }
+    return removed;
   }
 
   // 全量落盘（写失败只记日志——容错惯例）
@@ -193,6 +230,8 @@ export class UserMemory {
     if (same) {
       same.at = now;
       same.imp = Math.max(same.imp || 1, imp);
+      same.strength = Math.min(1, (same.strength || 0.4) + 0.15); // 重提 = 强化
+      same.recalls = (same.recalls || 0) + 1;
       if (src === 'manual') same.src = 'manual';
       u.updatedAt = now;
       this._save();
@@ -205,19 +244,22 @@ export class UserMemory {
       if (t.length > near.text.length) near.text = t;
       near.at = now;
       near.imp = Math.max(near.imp || 1, imp);
+      near.strength = Math.min(1, (near.strength || 0.4) + 0.1);
+      near.recalls = (near.recalls || 0) + 1;
       if (src === 'manual') near.src = 'manual';
       u.updatedAt = now;
       this._save();
       return { ok: true, merged: true };
     }
 
-    u.facts.push({ text: t, at: now, src, imp, lastUsed: 0 });
+    u.facts.push({ text: t, at: now, src, imp, lastUsed: 0, recalls: 0, strength: Math.min(1, imp / 3) });
     u.updatedAt = now;
     // 超上限：先丢重要性最低、最久未用的
     if (u.facts.length > this.maxPerUser) {
       u.facts.sort((a, b) => ((a.imp || 1) - (b.imp || 1)) || ((a.lastUsed || a.at || 0) - (b.lastUsed || b.at || 0)));
       u.facts.splice(0, u.facts.length - this.maxPerUser);
     }
+    this._pruneFaded();
     this._enforceGlobalCap();
     this._save();
     return { ok: true, dup: false };
@@ -257,11 +299,16 @@ export class UserMemory {
       }
       const ageDays = Math.max(0, (now - (f.lastUsed || f.at || now)) / 86400);
       const recency = ageDays < 7 ? 2 : ageDays < 30 ? 1 : 0;
-      return { f, score: (f.imp || 1) * 10 + overlap * 4 + recency };
+      // 强度（含时间衰减）为主，关键词重合其次，近用加成最小
+      return { f, score: this._effective(f, now) * 30 + overlap * 4 + recency };
     }).sort((a, b) => b.score - a.score).slice(0, Math.max(1, limit));
 
     const picked = scored.map((x) => x.f);
-    for (const f of picked) f.lastUsed = now;
+    for (const f of picked) {
+      f.lastUsed = now;
+      f.strength = Math.min(1, (f.strength || 0.4) + 0.15); // 回忆 = 强化
+      f.recalls = (f.recalls || 0) + 1;
+    }
     if (picked.length) this._save();
     return picked.map((f) => ({ ...f }));
   }

@@ -98,7 +98,10 @@
     "autoExtract": true,
     "maxFactsPerUser": 50,
     "maxFactsGlobal": 2000,
-    "episodicDays": 3
+    "episodicDays": 3,
+    "episodicRetentionDays": 30,
+    "factForgetDays": 120,
+    "factHalfLifeDays": 120
   },
   "webui": {
     "enabled": true,

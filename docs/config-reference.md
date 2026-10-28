@@ -49,6 +49,9 @@
 | `memory.autoExtract` | boolean | `true` | ChatBrain（_extractMemory） | 对话后自动提取记忆（`!== false` 视为开；每次回复多一次小 LLM 调用） |
 | `memory.maxFactsPerUser` / `memory.maxFactsGlobal` | number | `50` / `2000` | UserMemory | 每人 / 全局事实上限；超限先丢「重要性低、最久未用」的事实 |
 | `memory.episodicDays` | number | `3` | EpisodicMemory（core/platform/episodic.js） | 注入 prompt 的「最近几天群里的事」天数；日报后提炼并写 `data/memory/<群号>/<日期>.json` |
+| `memory.episodicRetentionDays` | number | `30` | EpisodicMemory | 每日记忆在磁盘保留天数，更早的删除（像人会淡忘久远细节） |
+| `memory.factForgetDays` | number | `120` | UserMemory | 自动提取的低重要性事实多久没再用就淡忘删除；手动记的永不删 |
+| `memory.factHalfLifeDays` | number | `120` | UserMemory | 记忆强度半衰期（天）：越久没提越弱，影响召回排序与淘汰 |
 | `webSearch.enabled` | boolean | `true`（有 key 才生效） | WebSearchRetriever（core/knowledge/websearch.js） | 联网搜索开关；`apiKey` 为空且 provider 非 `deepseek` 时自动禁用并回落萌娘/维基 |
 | `webSearch.provider` | string | `deepseek` | WebSearchRetriever | 搜索平台：`deepseek`（官方 Search API，复用 `llm.apiKey`）/ `zhipu`（智谱）/ `bocha`（博查） |
 | `webSearch.apiKey` | string | `''` | WebSearchRetriever | 平台 API Key；`provider: deepseek` 时留空即复用 `llm.apiKey`，其余平台必填 |

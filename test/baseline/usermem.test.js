@@ -130,6 +130,38 @@ describe('UserMemory 长期记忆升级（2026-10）', () => {
     assert.ok(facts.some((f) => f.text === '手动记下的重要偏好'));
     assert.equal(facts.filter((f) => f.text.startsWith('记忆')).length, 49);
   });
+
+  it('时间会淡化记忆：长期未用的自动事实被淡忘，手动记的保留', (t) => {
+    const dir = makeTmp();
+    const file = path.join(dir, 'user_memory.json');
+    const old = Math.floor(Date.now() / 1000) - 200 * 86400;
+    fs.writeFileSync(file, JSON.stringify({
+      groups: {
+        g1: {
+          u1: {
+            name: '张三',
+            updatedAt: old,
+            facts: [
+              { text: '自动记的旧事', at: old, src: 'auto', imp: 2, strength: 0.6, lastUsed: 0 },
+              { text: '手动记的重要事', at: old, src: 'manual', imp: 3, strength: 1, lastUsed: 0 },
+            ],
+          },
+        },
+      },
+    }));
+    const mem = new UserMemory(file, { forgetDays: 120 });
+    assert.deepEqual(mem.listFacts('g1', 'u1').map((f) => f.text), ['手动记的重要事']);
+  });
+
+  it('回忆会强化记忆（strength 上升、recalls 累加）', (t) => {
+    const { mem } = makeMem();
+    mem.setFact('g1', 'u1', '张三', '常去图书馆', 'auto');
+    const before = mem.listFacts('g1', 'u1')[0];
+    mem.recall('g1', 'u1', '图书馆', 1);
+    const after = mem.listFacts('g1', 'u1')[0];
+    assert.ok(after.strength > before.strength);
+    assert.equal(after.recalls, 1);
+  });
 });
 
 describe('UserMemory 提示注入加固（2026-10）', () => {

@@ -101,6 +101,8 @@ export function createApp(config, overrides = {}) {
     ? new UserMemory(memoryFile, {
         maxPerUser: memoryCfg.maxFactsPerUser ?? 50,
         maxGlobal: memoryCfg.maxFactsGlobal ?? 2000,
+        forgetDays: memoryCfg.factForgetDays ?? 120,
+        halfLifeDays: memoryCfg.factHalfLifeDays ?? 120,
       })
     : null);
 
@@ -141,6 +143,7 @@ export function createApp(config, overrides = {}) {
   // 长期记忆：群对话历史落盘（重启续接）+ 每日情节记忆（日报后提炼，最近 N 天注入 prompt）
   const episodic = overrides.episodic || new EpisodicMemory(path.join(dataDir, 'memory'), {
     days: config.memory?.episodicDays ?? 3,
+    retentionDays: config.memory?.episodicRetentionDays ?? 30,
   });
   const brain = overrides.brain || new ChatBrain({
     cfg: llm, lingo, arkdb, cache, wiki, moegirl, wikipedia, webSearch, usermem: memory, memoryCfg,
