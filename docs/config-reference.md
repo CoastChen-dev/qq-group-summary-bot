@@ -85,7 +85,7 @@
 | `llm.autoSpeak.groups` | array<number> | `[]` | routing + chat 插件 | 免 @ 自动接话的群号列表；空 = 所有群仍需 @。只走 chat，不触发指令；这些群回复一律不 @ 人 |
 | `llm.autoSpeak.window` | object | `{start:"07:00", end:"22:30"}` | routing | 自动接话时段（本地时间，支持跨零点）；窗口外该群恢复「必须 @ 才触发」，但回复仍不 @ 人；设为 `false` 关闭时段限制 |
 | `llm.autoSpeak.cooldownSeconds` | number | `60` | chat 插件 | 同群两次自动接话的最小间隔 |
-| `llm.autoSpeak.probability` | number | `0.35` | chat 插件 | 非提问/未点名消息的接话概率（0–1） |
+| `llm.autoSpeak.evalCooldownSeconds` | number | `20` | chat 插件 | 让模型判断「要不要接」的节流（不是概率决策；模型回 `<NO_REPLY>` 即不接） |
 | `llm.autoSpeak.maxPerHour` | number | `12` | chat 插件 | 同群每小时自动接话上限 |
 | `llm.chatMinuteLimit` | number | `20` | ChatBrain | 同群每分钟最多触发的 LLM 应答次数（超限静默丢弃；0 = 不限） |
 | `llm.retrievalGate` | boolean | `true` | ChatBrain | 检索门：闲聊消息跳过通用检索（提速）；false 恢复总是检索（`!== false` 视为开） |

@@ -241,6 +241,31 @@ export function createRouting(options) {
       return;
     }
 
+    // S1' 戳一戳（notice notify/poke）：被戳的是机器人 → 视作「找它」，同 @ 走 chat。
+    // 以前 notice 一律丢弃，导致被戳没有反应（2026-10）。
+    if (event.post_type === 'notice') {
+      const isPoke = event.sub_type === 'poke' || event.notice_type === 'poke';
+      if (!isPoke) return;
+      const target = event.target_id ?? event.user_id;
+      if (!event.group_id || String(target) !== String(state.selfId)) return;
+      if (!tracksGroup(event.group_id) || inQuietHours()) return;
+      const pokerName = event.sender?.card || event.sender?.nickname || '群友';
+      registry.dispatch({
+        lingo, arkdb, memory, analytics, client,
+        groupId: event.group_id,
+        userId: event.user_id,
+        userName: pokerName,
+        messageId: '',
+        text: '（戳了戳你）',
+        faces: [],
+        atTargets: [],
+        selfId: state.selfId,
+        noAt: !replyAtUser || autoSpeakGroups.has(String(event.group_id)),
+        poke: true,
+      });
+      return;
+    }
+
     // S2 只处理群消息（其余 post_type / 私聊消息在此 return）
     if (event.post_type !== 'message' || event.message_type !== 'group') return;
     // S3 机器人自己的消息：includeSelf=false 时不理会（selfId 为 0 未回填时本行自动跳过）
@@ -264,6 +289,10 @@ export function createRouting(options) {
     const faceIds = Array.isArray(event.message)
       ? event.message.filter((seg) => seg?.type === 'face' && seg.data?.id !== undefined).map((seg) => String(seg.data.id))
       : [];
+    // 本条消息 @ 了谁（chat 的自动接话门据此判断「是不是在叫别人」）
+    const atTargets = Array.isArray(event.message)
+      ? event.message.filter((seg) => seg?.type === 'at').map((seg) => String(seg.data?.qq ?? ''))
+      : [];
     const senderName = event.sender?.card || event.sender?.nickname || '群友';
     // 回复默认不 @ 人（2026-10；config.llm.replyAtUser=true 可恢复 @ 提问者）；
     // 试点群无论配置如何都永不 @ 人
@@ -285,6 +314,8 @@ export function createRouting(options) {
         messageId: rec.id,
         text: cmd,
         faces: faceIds,
+        atTargets,
+        selfId: state.selfId,
         noAt,
       });
       return;
@@ -331,6 +362,8 @@ export function createRouting(options) {
       messageId: rec.id,
       text: question,
       faces: faceIds,
+      atTargets,
+      selfId: state.selfId,
       noAt,
     });
     if (typeof cmdReply === 'string') {

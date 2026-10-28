@@ -310,6 +310,27 @@ describe('routing：免 @ 自动接话群（2026-10）', () => {
   });
 });
 
+describe('routing：戳一戳（notice poke）', () => {
+  it('被戳的是机器人 → 转 dispatch（chat 兜底）；戳别人忽略', () => {
+    const seen = [];
+    const registry = { dispatch: (ctx) => { seen.push(ctx); return true; }, dispatchAutoSpeak: () => null };
+    const { routing, state } = mkRouting({ registry });
+    state.selfId = 424242;
+    const poke = (target) => ({
+      post_type: 'notice', notice_type: 'notify', sub_type: 'poke',
+      group_id: 7, user_id: 2, target_id: target, sender: { nickname: '甲' },
+    });
+    routing.onEvent(poke(424242));
+    assert.equal(seen.length, 1);
+    assert.equal(seen[0].text, '（戳了戳你）');
+    assert.equal(seen[0].userId, 2);
+    assert.equal(seen[0].poke, true);
+
+    routing.onEvent(poke(999));
+    assert.equal(seen.length, 1);
+  });
+});
+
 describe('routing：getAllGroupIds 与 backfill 群集合选择', () => {
   it('getAllGroupIds：get_group_list 成功 → 取 group_id 列表', async () => {
     const { routing } = mkRouting({ groupList: [{ group_id: 12, group_name: '甲' }, { group_id: 34, group_name: '乙' }] });

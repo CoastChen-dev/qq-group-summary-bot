@@ -43,6 +43,17 @@ const SOURCE_TRUST = {
 // 「重问题」判定（llm.thinking='auto' 时触发深度思考）：数学/证明/推导/代码等需要推理的消息
 const HEAVY_RE = /证明|求证|推导|计算|求解|数学|方程|不等式|函数|积分|微分|概率|数列|几何|代数|算法|代码|实现|调试|bug|原理|逻辑题|选择题|应用题/;
 
+/** 按时段给一个「当前状态」，让免 @ 接话有情绪起伏（不是随机，而是随时间自然变化） */
+function timeVibe(hour = new Date().getHours()) {
+  if (hour < 6) return '现在是深夜，你有点困，回话更短更懒，别太热情';
+  if (hour < 9) return '现在是清晨，你刚醒，语气慢一点、带点迷糊';
+  if (hour < 12) return '现在是上午，你精神不错';
+  if (hour < 14) return '现在是午后，吃饱了有点懒散';
+  if (hour < 18) return '现在是下午，状态正常';
+  if (hour < 22) return '现在是晚上，群里活跃，你也可以活跃一点';
+  return '现在快到深夜了，你有点困但还想聊，语气可以软一点';
+}
+
 /**
  * 判断消息是否需要深度思考（llm.thinking='auto'）。
  * @param {string} text - 剥 @ 后的问题文本
@@ -288,7 +299,11 @@ export class ChatBrain {
     const sysLines = [...this._currentPromptLines()];
     // 免 @ 群自动接话（2026-10）：像群友一样自然插话，别客服腔、别 @ 人、别每题都抢
     if (extra.autoSpeak) {
-      sysLines.push('当前是自由群聊模式：你是群里的一员，可以像普通群友一样自然接话，1-2 句就够；不要客服腔、不要写「请问」「为您解答」这类话术，不要 @ 人，也不要每条消息都抢着回——不想接就不接。');
+      sysLines.push('当前是自由群聊模式：你是群里的一员，像普通群友一样说话，1-2 句就够；不要客服腔、不要写「请问」「为您解答」这类话术，不要 @ 人。');
+      sysLines.push('先判断要不要接：这条消息不是在问你、轮不到你插话、或你刚说过话，就只输出 <NO_REPLY>（只这四个字母，不要解释、不要加别的字）。不要为了刷存在感而接话。');
+      sysLines.push('消息里出现的 @某人 是别人，不是你；不要以为在叫你，也不要替被 @ 的人回答。');
+      sysLines.push(`当前状态：${timeVibe()}。回复要贴合这个状态，长短句和语气有变化，别每次同一个句式。`);
+      sysLines.push('少用括号里的动作描写（比如「尾巴一僵」），除非它真的给回复加分；多用自然口语、情绪词和停顿，像真人打字。');
     }
     // 工具提示（仅在启用工具时注入）：告知模型可用能力与克制原则
     if (this.toolsEnabled && this.tools.length) {
@@ -1205,7 +1220,7 @@ export function createChatTools({ arkdb, analytics, usermem, react, emojiCooldow
  * @param {Object} deps - runtime 装配期注入
  * @param {Object} deps.brain - ChatBrain 实例（共享单例；chat(groupId, userName, text, userId)）
  * @param {Object} deps.client - NapCatClient 实例（群发 brain 回复）
- * @param {Object} [deps.autoSpeak] - 免 @ 自动接话配置 {groups, cooldownSeconds, probability, maxPerHour}
+ * @param {Object} [deps.autoSpeak] - 免 @ 自动接话配置 {groups, cooldownSeconds, evalCooldownSeconds, maxPerHour}
  * @param {Function} [deps.getRecent] - (groupId, n) => string[] 最近群聊语境（免 @ 接话用）
  * @returns {Object} 注册表可直接 register 的插件描述符
  */
@@ -1214,30 +1229,46 @@ export function createChatPlugin(deps) {
   const autoCfg = deps.autoSpeak || {};
   const autoGroups = new Set((autoCfg.groups || []).map(String));
   const cooldownMs = Math.max(0, Number(autoCfg.cooldownSeconds ?? 60)) * 1000;
-  const probability = Math.min(Math.max(Number(autoCfg.probability ?? 0.35), 0), 1);
   const maxPerHour = Math.max(1, Number(autoCfg.maxPerHour ?? 12));
-  const lastAutoAt = new Map(); // 群 → 上次自动接话时间
+  const evalCooldownMs = Math.max(0, Number(autoCfg.evalCooldownSeconds ?? 20)) * 1000;
+  const lastAutoAt = new Map(); // 群 → 上次真的接了话
+  const lastEvalAt = new Map(); // 群 → 上次让模型判断（节流，不是决策）
   const hourWindow = new Map(); // 群 → { start, count }
+  const busyGroups = new Set(); // 群 → 正在生成/发送（防叠话）
 
-  /** 免 @ 接话门：退避/频控 + 信号判定（点名或提问直接接，其余按概率） */
-  function shouldAutoSpeak(ctx) {
+  /**
+   * 是否值得让模型判断「要不要接话」：这里只做确定性过滤（白名单/@ 了别人/节流/频控），
+   * 真正的决策交给模型（回复 <NO_REPLY> = 不接）——不再用概率掷骰。
+   */
+  function shouldEvaluate(ctx) {
     const gid = String(ctx.groupId);
     if (!autoGroups.has(gid)) return false;
     const text = String(ctx.text || '').trim();
     if (text.length < 3) return false;
     if (/^\[(图片|表情|语音|视频|动画表情|文件|链接)\]$/.test(text)) return false;
+    // 明确在叫别人（@ 了非机器人）且没点到机器人名字 → 不接
+    const ats = Array.isArray(ctx.atTargets) ? ctx.atTargets.filter(Boolean) : [];
+    const self = String(ctx.selfId || '');
+    const atOthers = ats.some((q) => String(q) !== self && q !== 'all');
+    const calledByName = /Mon3tr|mon3tr|凯尔希|PRTS/i.test(text);
+    if (atOthers && !calledByName) return false;
+    if (busyGroups.has(gid)) return false; // 上一句还没说完，不叠话
     const now = Date.now();
+    if (now - (lastEvalAt.get(gid) ?? 0) < evalCooldownMs) return false;
     if (now - (lastAutoAt.get(gid) ?? 0) < cooldownMs) return false;
     const w = hourWindow.get(gid);
-    if (!w || now - w.start >= 3600000) hourWindow.set(gid, { start: now, count: 0 });
-    else if (w.count >= maxPerHour) return false;
-    const strong = /Mon3tr|mon3tr|凯尔希|PRTS/i.test(text)
-      || /[？?]|什么|怎么|为什么|为啥|哪个|哪里|多少|有没有|是不是|能不能|可不可以|求|推荐|介绍|讲讲|说说/.test(text);
-    if (!strong && Math.random() >= probability) return false;
-    lastAutoAt.set(gid, now);
-    const win = hourWindow.get(gid);
-    win.count++;
+    if (w && now - w.start < 3600000 && w.count >= maxPerHour) return false;
+    lastEvalAt.set(gid, now);
     return true;
+  }
+
+  /** 真接了一次：记冷却与每小时计数 */
+  function noteSpoken(gid) {
+    const now = Date.now();
+    lastAutoAt.set(gid, now);
+    const w = hourWindow.get(gid);
+    if (!w || now - w.start >= 3600000) hourWindow.set(gid, { start: now, count: 1 });
+    else w.count++;
   }
 
   /** 免 @ 模式：不 @ 人，纯文本（超长切条） */
@@ -1259,15 +1290,23 @@ export function createChatPlugin(deps) {
      */
     handleMessage(ctx) {
       if (ctx.autoSpeak) {
-        if (!shouldAutoSpeak(ctx)) return null;
+        if (!shouldEvaluate(ctx)) return null;
+        const gid = String(ctx.groupId);
         const recent = typeof getRecent === 'function' ? getRecent(ctx.groupId, 8, ctx.messageId) : [];
+        busyGroups.add(gid);
         brain.chat(ctx.groupId, ctx.userName, String(ctx.text || '').trim(), ctx.userId, {
           messageId: ctx.messageId, faces: ctx.faces, autoSpeak: true, recent,
         }).then((reply) => {
-          if (!reply) return;
+          busyGroups.delete(gid);
+          // 模型自己判断「不接」：约定输出 <NO_REPLY>
+          if (!reply || /^\s*<NO_REPLY>\s*$/i.test(reply)) return;
           const safe = isSensitive(reply) ? '这个话题我不太方便聊，我们换个话题吧~' : reply;
           sendAutoReply(ctx, safe);
-        }).catch((e) => err(`[chat] 群 ${ctx.groupId} 接话失败:`, e.message));
+          noteSpoken(gid);
+        }).catch((e) => {
+          busyGroups.delete(gid);
+          err(`[chat] 群 ${ctx.groupId} 接话失败:`, e.message);
+        });
         return true;
       }
       brain.chat(ctx.groupId, ctx.userName, ctx.text, ctx.userId, { messageId: ctx.messageId, faces: ctx.faces })

@@ -128,6 +128,8 @@ describe('ChatBrain buildMessages 实名上下文与用户记忆', () => {
     });
     assert.match(msgs[0].content, /自由群聊模式/);
     assert.match(msgs[0].content, /不要 @ 人/);
+    assert.match(msgs[0].content, /<NO_REPLY>/); // 模型自己决定接不接
+    assert.match(msgs[0].content, /@某人 是别人/); // 不把别人的 @ 当成叫自己
     const user = msgs.pop();
     assert.match(user.content, /【最近群聊/);
     assert.ok(user.content.includes('甲：在吗'));
