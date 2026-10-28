@@ -15,6 +15,7 @@
     "chatHistoryLimit": 12,
     "autoSpeak": {
       "groups": [],
+      "window": { "start": "07:00", "end": "22:30" },
       "cooldownSeconds": 60,
       "probability": 0.35,
       "maxPerHour": 12

@@ -81,7 +81,8 @@
 | `llm.chatHistoryLimit` | number | `12` | ChatBrain | 每群保留的上下文条数 |
 | `llm.chatConcurrency` | number | `3` | ChatBrain | LLM 请求并发上限（信号量） |
 | `llm.chatCooldownSeconds` | number | `3` | ChatBrain | 同一人的应答冷却秒数（窗口内再 @ 静默丢弃；0 = 不限） |
-| `llm.autoSpeak.groups` | array<number> | `[]` | routing + chat 插件 | 免 @ 自动接话的群号列表；空 = 所有群仍需 @。只走 chat，不触发指令 |
+| `llm.autoSpeak.groups` | array<number> | `[]` | routing + chat 插件 | 免 @ 自动接话的群号列表；空 = 所有群仍需 @。只走 chat，不触发指令；这些群回复一律不 @ 人 |
+| `llm.autoSpeak.window` | object | `{start:"07:00", end:"22:30"}` | routing | 自动接话时段（本地时间，支持跨零点）；窗口外该群恢复「必须 @ 才触发」，但回复仍不 @ 人；设为 `false` 关闭时段限制 |
 | `llm.autoSpeak.cooldownSeconds` | number | `60` | chat 插件 | 同群两次自动接话的最小间隔 |
 | `llm.autoSpeak.probability` | number | `0.35` | chat 插件 | 非提问/未点名消息的接话概率（0–1） |
 | `llm.autoSpeak.maxPerHour` | number | `12` | chat 插件 | 同群每小时自动接话上限 |

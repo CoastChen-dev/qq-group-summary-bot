@@ -182,6 +182,20 @@ export function createApp(config, overrides = {}) {
   // 不触发指令（见 registry.dispatchAutoSpeak）。
   const autoSpeakCfg = llm.autoSpeak || {};
   const autoSpeakGroups = new Set((autoSpeakCfg.groups || []).map(String));
+  // 自动接话时段（config.llm.autoSpeak.window，默认 07:00–22:30）：窗口外该群恢复必须 @ 才触发；
+  // 支持跨零点（start > end）；window 省略 = 全天可接话。
+  const parseHM = (s, fallback) => {
+    const m = /^(\d{1,2}):(\d{2})$/.exec(String(s || '').trim());
+    if (!m) return fallback;
+    const h = Number(m[1]);
+    const min = Number(m[2]);
+    if (h > 23 || min > 59) return fallback;
+    return h * 60 + min;
+  };
+  const winCfg = autoSpeakCfg.window || {};
+  const autoSpeakWindow = autoSpeakCfg.window === false
+    ? null
+    : { startMin: parseHM(winCfg.start, 7 * 60), endMin: parseHM(winCfg.end, 22 * 60 + 30) };
   const routing = createRouting({
     store, analytics, client, registry, lingo, arkdb, memory, state,
     includeSelf, tracksGroup, trackedGroups,
@@ -189,6 +203,7 @@ export function createApp(config, overrides = {}) {
     backfillMaxHours: config.backfill?.maxHours ?? 72,
     backfillMinOfflineMinutes: config.backfill?.minOfflineMinutes ?? 5,
     autoSpeakGroups,
+    autoSpeakWindow,
   });
   const summaryPlugin = createSummaryPlugin({
     store, summarizer, client, filterMessages,

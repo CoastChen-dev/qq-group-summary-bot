@@ -1275,10 +1275,10 @@ export function createChatPlugin(deps) {
           if (!reply) return;
           // 风控降险：出站内容敏感词兜底——命中隐私/违禁关键词时替换为安全文案，不发送原文
           const safe = isSensitive(reply) ? '这个话题我不太方便聊，我们换个话题吧~' : reply;
-          // 超长回复分段发（QQ 单条有长度上限，超了会被拒发）：第一条真 @ 提问者，其余纯文本，避免重复提醒
+          // 超长回复分段发（QQ 单条有长度上限，超了会被拒发）：第一条真 @ 提问者（免 @ 群除外），其余纯文本
           const parts = splitMessage(safe);
           for (let i = 0; i < parts.length; i++) {
-            if (i === 0 && ctx.userId) await client.sendGroupMsgAt(ctx.groupId, ctx.userId, parts[i]);
+            if (i === 0 && ctx.userId && !ctx.noAt) await client.sendGroupMsgAt(ctx.groupId, ctx.userId, parts[i]);
             else await client.sendGroupMsg(ctx.groupId, parts[i]);
           }
         })

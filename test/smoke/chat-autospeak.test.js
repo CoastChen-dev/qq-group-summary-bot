@@ -81,4 +81,13 @@ describe('chat 免 @ 自动接话', () => {
     assert.equal(client.sent[0].at, true);
     assert.equal(client.sent[0].uid, 9);
   });
+
+  it('试点群被 @ 时（noAt）：仍回纯文本，不 @ 人', async () => {
+    const { plugin, client } = mkPlugin();
+    const ctx = { groupId: 1031477964, userId: 9, userName: '乙', messageId: 3, text: '@机器人 在吗', noAt: true };
+    assert.equal(plugin.handleMessage(ctx), true);
+    await tick(10);
+    assert.equal(client.sent[0].msg, '那就吃面吧');
+    assert.equal(client.sent[0].at, undefined);
+  });
 });

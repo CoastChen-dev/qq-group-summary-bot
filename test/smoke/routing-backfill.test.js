@@ -36,7 +36,7 @@ const flush = async () => {
 function mkRouting(over = {}) {
   const state = { selfId: 0, ready: false, backfillDone: false, wsConnected: false };
   const seenBy = over.seenByGroup ?? {}; // 各群水位（坑 9：backfill 起点按群读）
-  const calls = { getHistory: 0, historyGids: [], seqs: [], added: [], recorded: [], lastSeenSet: [] };
+  const calls = { getHistory: 0, historyGids: [], seqs: [], added: [], recorded: [], lastSeenSet: [], sent: [] };
   // 心跳模拟：touchConnected 之后 runtime.json 被写成 now——getLastConnectedAt 也随之为 now。
   // 老代码「先心跳后读水位」会因此恒得离线 0 分钟（2026-10 回归点）。
   let touched = false;
@@ -61,7 +61,8 @@ function mkRouting(over = {}) {
       if (over.ignoreSeq) return { messages: all.slice(-Math.min(count, all.length)) }; // 模拟 API 忽略 message_seq
       return { messages: all.slice(Math.max(0, end - count), end) };
     },
-    sendGroupMsg: async () => {},
+    sendGroupMsg: async (gid, msg) => { calls.sent.push({ gid, msg, plain: true }); },
+    sendGroupMsgAt: async (gid, uid, msg) => { calls.sent.push({ gid, uid, msg, plain: false }); },
     setMsgEmojiLike: async () => {},
   };
   const store = {
@@ -89,6 +90,7 @@ function mkRouting(over = {}) {
     backfillMaxHours: over.backfillMaxHours ?? 72,
     backfillStaggerMs: 0, // 测试关闭群间错峰（生产默认 800ms）
     autoSpeakGroups: new Set((over.autoSpeakGroups || []).map(String)),
+    autoSpeakWindow: over.autoSpeakWindow ?? null,
   });
   return { routing, state, client, calls, resetOnline };
 }
@@ -270,6 +272,33 @@ describe('routing：免 @ 自动接话群（2026-10）', () => {
 
     routing.onEvent(msgEvent(999, '普通群不接话', 2));
     assert.equal(seen.length, 1);
+  });
+
+  it('窗口外：非 @ 不接话；@ 后的回执仍走纯文本（不 @ 人）', async () => {
+    const seen = [];
+    const registry = {
+      dispatch: () => '指令回复',
+      dispatchAutoSpeak: (ctx) => { seen.push(ctx); return true; },
+    };
+    // 当前时刻必然不在窗口内（窗口只覆盖 00:00–00:01）
+    const { routing, calls } = mkRouting({
+      autoSpeakGroups: [1031477964], registry,
+      autoSpeakWindow: { startMin: 0, endMin: 1 },
+    });
+    routing.onEvent(msgEvent(1031477964, '随便聊聊'));
+    assert.equal(seen.length, 0); // 窗口外非 @ 消息不接
+
+    routing.onEvent({
+      post_type: 'message', message_type: 'group', group_id: 1031477964, message_id: 9,
+      user_id: 2, time: Math.floor(Date.now() / 1000),
+      message: [{ type: 'text', data: { text: '@机器人 在吗' } }],
+      sender: { nickname: '甲' },
+    });
+    await flush();
+    assert.equal(seen.length, 0); // 走普通 dispatch，不走自动接话
+    assert.equal(calls.sent.length, 1);
+    assert.equal(calls.sent[0].plain, true); // 纯文本，不 @ 人
+    assert.equal(calls.sent[0].msg, '指令回复');
   });
 
   it('未配置 autoSpeakGroups：所有群仍需 @（原行为不变）', () => {

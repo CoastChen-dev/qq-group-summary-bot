@@ -39,8 +39,21 @@ export function createRouting(options) {
     store, analytics, client, registry, lingo, arkdb, memory, state,
     includeSelf, tracksGroup, trackedGroups,
     quietEnabled, quietStart, quietEnd, backfillMaxHours, backfillStaggerMs = 300, backfillMinOfflineMinutes = 5,
-    autoSpeakGroups = new Set(),
+    autoSpeakGroups = new Set(), autoSpeakWindow = null,
   } = options;
+
+  /**
+   * 免 @ 接话时段判定（config.llm.autoSpeak.window）：窗口外该群恢复「必须 @ 才触发」。
+   * 支持跨零点（start > end）；window 为空 = 全天可自动接话。
+   * @param {Date} [date=new Date()] - 判定时刻
+   * @returns {boolean} true = 当前在自动接话时段内
+   */
+  function inAutoSpeakWindow(date = new Date()) {
+    if (!autoSpeakWindow) return true;
+    const m = date.getHours() * 60 + date.getMinutes();
+    const { startMin, endMin } = autoSpeakWindow;
+    return startMin <= endMin ? (m >= startMin && m < endMin) : (m >= startMin || m < endMin);
+  }
 
   /**
    * 静默时段判定（路由 S7；优先级高于总结关键词与指令、低于入库——静默只是不回，消息照常入库）：
@@ -252,11 +265,16 @@ export function createRouting(options) {
       ? event.message.filter((seg) => seg?.type === 'face' && seg.data?.id !== undefined).map((seg) => String(seg.data.id))
       : [];
     const senderName = event.sender?.card || event.sender?.nickname || '群友';
+    // 试点群永不 @ 人：自动接话、被 @ 后的回复与指令回执一律纯文本
+    const isAutoGroup = autoSpeakGroups.has(String(event.group_id));
+    const noAt = isAutoGroup;
 
     // S6' 免 @ 群（config.llm.autoSpeak.groups）：不要求 @，交给 chat 的接话门判断要不要说话。
     // 只走 dispatchAutoSpeak（仅 chat 参与），避免闲聊里的「总结/刷新数据」被指令插件认领。
+    // 窗口外（如 22:30–07:00）该群恢复必须 @ 才触发。
     if (!isMentioned) {
-      if (!autoSpeakGroups.has(String(event.group_id))) return;
+      if (!isAutoGroup) return;
+      if (!inAutoSpeakWindow()) return;
       if (inQuietHours()) return;
       registry.dispatchAutoSpeak?.({
         lingo, arkdb, memory, analytics, client,
@@ -266,6 +284,7 @@ export function createRouting(options) {
         messageId: rec.id,
         text: cmd,
         faces: faceIds,
+        noAt,
       });
       return;
     }
@@ -285,9 +304,9 @@ export function createRouting(options) {
     if (!question) {
       log(`[group ${event.group_id}] 收到仅@机器人（无内容）的消息`);
       const tip = '艾特Mon3tr干什么呀喵';
-      const send = event.user_id
+      const send = !noAt && event.user_id
         ? client.sendGroupMsgAt(event.group_id, event.user_id, tip)
-        : client.sendGroupMsg(event.group_id, `@${senderName} ${tip}`);
+        : client.sendGroupMsg(event.group_id, noAt ? tip : `@${senderName} ${tip}`);
       send.catch((e) => err(`[group ${event.group_id}] 发送提示失败:`, e.message));
       return;
     }
@@ -311,14 +330,15 @@ export function createRouting(options) {
       messageId: rec.id,
       text: question,
       faces: faceIds,
+      noAt,
     });
     if (typeof cmdReply === 'string') {
       log(`[group ${event.group_id}] 指令响应: ${question.slice(0, 30)}`);
-      // 真 @ 提问者发送指令回复（无 user_id 时退化为纯文本）；超长按字节切条，第一条 @、其余纯文本
+      // 真 @ 提问者发送指令回复（无 user_id / 免 @ 群时为纯文本）；超长按字节切条
       const parts = splitMessage(cmdReply);
       (async () => {
         for (let i = 0; i < parts.length; i++) {
-          if (i === 0 && event.user_id) await client.sendGroupMsgAt(event.group_id, event.user_id, parts[i]);
+          if (i === 0 && event.user_id && !noAt) await client.sendGroupMsgAt(event.group_id, event.user_id, parts[i]);
           else await client.sendGroupMsg(event.group_id, parts[i]);
         }
       })().catch((e) => err(`[group ${event.group_id}] 指令发送失败:`, e.message));
