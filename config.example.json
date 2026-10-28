@@ -13,6 +13,7 @@
     "maxTokens": 2048,
     "chatEnabled": true,
     "chatHistoryLimit": 12,
+    "replyAtUser": false,
     "autoSpeak": {
       "groups": [],
       "window": { "start": "07:00", "end": "22:30" },

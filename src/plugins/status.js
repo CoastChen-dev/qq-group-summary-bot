@@ -105,7 +105,7 @@ export function createStatusPlugin() {
           `Bot 运行时长：${formatUptime(process.uptime())}`,
         ].join('\n');
 
-        const send = ctx.userId
+        const send = ctx.userId && !ctx.noAt
           ? client.sendGroupMsgAt(ctx.groupId, ctx.userId, msg)
           : client.sendGroupMsg(ctx.groupId, msg);
         if (send && typeof send.catch === 'function') send.catch(() => {});

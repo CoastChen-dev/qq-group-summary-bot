@@ -48,13 +48,13 @@ export function createRefreshPlugin(deps) {
   let runningPromise = null;
 
   /**
-   * 结果回执：群指令触发时向该群回「【数据更新】…」（真 @ 提问者）；发送失败只记日志
+   * 结果回执：群指令触发时向该群回「【数据更新】…」（默认纯文本；noAt 为 false 且给了 atUserId 才真 @）
    * @returns {Promise<void>}
    */
-  async function sendResult(notifyGroupId, atUserId, msg) {
+  async function sendResult(notifyGroupId, atUserId, msg, noAt = false) {
     if (!notifyGroupId) return;
     try {
-      if (atUserId) await client.sendGroupMsgAt(notifyGroupId, atUserId, msg);
+      if (atUserId && !noAt) await client.sendGroupMsgAt(notifyGroupId, atUserId, msg);
       else await client.sendGroupMsg(notifyGroupId, msg);
     } catch (e) {
       err('[refresh] 通知发送失败:', e.message);
@@ -66,14 +66,14 @@ export function createRefreshPlugin(deps) {
    * 触发者各有各的回执（同群重复触发也会各收到一条结果，不会重复拉数据）。
    * @returns {Promise<string>} 「【数据更新】…」结果文本
    */
-  async function refresh(notifyGroupId = null, atUserId = null) {
+  async function refresh(notifyGroupId = null, atUserId = null, noAt = false) {
     if (runningPromise) {
       log('[refresh] 已有更新任务在跑，等待结果复用（不重复下载）');
       const msg = await runningPromise;
-      await sendResult(notifyGroupId, atUserId, msg);
+      await sendResult(notifyGroupId, atUserId, msg, noAt);
       return msg;
     }
-    runningPromise = runRefresh(notifyGroupId, atUserId).finally(() => { runningPromise = null; });
+    runningPromise = runRefresh(notifyGroupId, atUserId, noAt).finally(() => { runningPromise = null; });
     return runningPromise;
   }
 
@@ -86,7 +86,7 @@ export function createRefreshPlugin(deps) {
    * 副作用：联网下载写盘 data/ark/（原子写入，成功后清掉历史 .bak）、arkdb 内存热重载、
    * 更新时清 q:* 知识检索缓存（坑 3）、可能群发播报；发送失败吞掉只记日志
    */
-  async function runRefresh(notifyGroupId = null, atUserId = null) {
+  async function runRefresh(notifyGroupId = null, atUserId = null, noAt = false) {
     log('[refresh] 开始更新本地数据...');
 
     // 快照旧数据（用于新增播报对比；走公开快照 API，不再直读 characters/_isOperator/gachaPools）
@@ -128,7 +128,7 @@ export function createRefreshPlugin(deps) {
     }
 
     const msg = `【数据更新】\n成功：${updated.length ? updated.join('、') : '无'}\n未变化：${unchanged.length ? unchanged.join('、') : '无'}\n${failed.length ? '失败：' + failed.join('、') : '全部成功'}`;
-    await sendResult(notifyGroupId, atUserId, msg);
+    await sendResult(notifyGroupId, atUserId, msg, noAt);
     if (announce && broadcast) {
       if (notifyGroupId) {
         client.sendGroupMsg(notifyGroupId, announce).catch(() => {});
@@ -158,14 +158,14 @@ export function createRefreshPlugin(deps) {
       if (!/^(刷新数据|更新数据|更新数据库)$/.test(t)) return null;
       log(`[group ${ctx.groupId}] 收到数据刷新指令`);
       const ack = '正在更新本地数据库，稍候…';
-      const sendAck = ctx.userId
+      const sendAck = ctx.userId && !ctx.noAt
         ? client.sendGroupMsgAt(ctx.groupId, ctx.userId, ack)
         : client.sendGroupMsg(ctx.groupId, ack);
       sendAck.catch(() => {});
-      refresh(ctx.groupId, ctx.userId).catch((e) => {
+      refresh(ctx.groupId, ctx.userId, ctx.noAt === true).catch((e) => {
         err('[refresh] 手动刷新失败:', e.message);
         const fail = `数据更新失败：${e.message}`;
-        const sendFail = ctx.userId
+        const sendFail = ctx.userId && !ctx.noAt
           ? client.sendGroupMsgAt(ctx.groupId, ctx.userId, fail)
           : client.sendGroupMsg(ctx.groupId, fail);
         sendFail.catch(() => {});

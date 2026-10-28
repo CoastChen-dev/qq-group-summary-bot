@@ -92,7 +92,7 @@ export function createMaaPlugin({
 
   const send = (ctx, text, at = false) => {
     if (!client) return;
-    const p = at && ctx.userId
+    const p = at && ctx.userId && !ctx.noAt
       ? client.sendGroupMsgAt(ctx.groupId, ctx.userId, text)
       : client.sendGroupMsg(ctx.groupId, text);
     if (p && typeof p.catch === 'function') p.catch(() => {});

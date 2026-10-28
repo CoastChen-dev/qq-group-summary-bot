@@ -39,7 +39,7 @@ export function createRouting(options) {
     store, analytics, client, registry, lingo, arkdb, memory, state,
     includeSelf, tracksGroup, trackedGroups,
     quietEnabled, quietStart, quietEnd, backfillMaxHours, backfillStaggerMs = 300, backfillMinOfflineMinutes = 5,
-    autoSpeakGroups = new Set(), autoSpeakWindow = null,
+    autoSpeakGroups = new Set(), autoSpeakWindow = null, replyAtUser = false,
   } = options;
 
   /**
@@ -265,9 +265,10 @@ export function createRouting(options) {
       ? event.message.filter((seg) => seg?.type === 'face' && seg.data?.id !== undefined).map((seg) => String(seg.data.id))
       : [];
     const senderName = event.sender?.card || event.sender?.nickname || '群友';
-    // 试点群永不 @ 人：自动接话、被 @ 后的回复与指令回执一律纯文本
+    // 回复默认不 @ 人（2026-10；config.llm.replyAtUser=true 可恢复 @ 提问者）；
+    // 试点群无论配置如何都永不 @ 人
     const isAutoGroup = autoSpeakGroups.has(String(event.group_id));
-    const noAt = isAutoGroup;
+    const noAt = !replyAtUser || isAutoGroup;
 
     // S6' 免 @ 群（config.llm.autoSpeak.groups）：不要求 @，交给 chat 的接话门判断要不要说话。
     // 只走 dispatchAutoSpeak（仅 chat 参与），避免闲聊里的「总结/刷新数据」被指令插件认领。

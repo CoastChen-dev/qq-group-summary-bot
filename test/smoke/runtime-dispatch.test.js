@@ -135,7 +135,7 @@ describe('createApp 全链（P3 五插件装配面）', () => {
     send(atEvent('波登可是谁'));
     await tick();
     assert.deepEqual(calls.brainChat, { gid: 9, name: '博士', q: '波登可是谁', uid: 555, messageId: 'm1', faces: [] });
-    assert.deepEqual(sent, [{ gid: 9, at: '555', msg: '回复内容' }]); // 真 @ 提问者
+    assert.deepEqual(sent, [{ gid: 9, msg: '回复内容' }]); // 默认纯文本，不 @ 人
   });
 
   it('消息里的表情段 ID 透传到 brain（「给我贴<表情图>」场景）', async () => {
@@ -172,22 +172,30 @@ describe('createApp 全链（P3 五插件装配面）', () => {
     await tick(40);
     assert.equal(calls.brainChat, null);
     assert.deepEqual(sent, [
-      { gid: 9, at: '555', msg: '正在更新本地数据库，稍候…' },
-      { gid: 9, at: '555', msg: '【数据更新】\n成功：无\n未变化：无\n全部成功' },
+      { gid: 9, msg: '正在更新本地数据库，稍候…' },
+      { gid: 9, msg: '【数据更新】\n成功：无\n未变化：无\n全部成功' },
     ]);
   });
 
-  it('平台状态指令：#status 经真实链路进入 status 插件并 @ 提问者', async () => {
+  it('平台状态指令：#status 经真实链路进入 status 插件（默认纯文本，不 @ 人）', async () => {
     const { send, sent, calls } = mkApp();
     send(atEvent('#status'));
     await tick();
     assert.equal(calls.brainChat, null); // 被 status 消费，不落 chat
     assert.equal(sent.length, 1);
-    assert.equal(sent[0].at, '555');
+    assert.equal(sent[0].at, undefined); // llm.replyAtUser 默认 false → 不 @
     assert.match(sent[0].msg, /【NapCat 平台状态】/);
     assert.match(sent[0].msg, /账号：10001（Mon3tr）/);
     assert.match(sent[0].msg, /平台：NapCat\.Onebot v4\.18\.37/);
     assert.match(sent[0].msg, /WS：已连接/);
+  });
+
+  it('llm.replyAtUser=true 时恢复真 @ 提问者', async () => {
+    const { send, sent } = mkApp({ llm: { replyAtUser: true } });
+    send(atEvent('#status'));
+    await tick();
+    assert.equal(sent.length, 1);
+    assert.equal(sent[0].at, '555');
   });
 
   it('确定性指令（学习）返回 string：路由层发送、指令日志路径不变', async () => {
@@ -196,13 +204,13 @@ describe('createApp 全链（P3 五插件装配面）', () => {
     await tick();
     assert.deepEqual(calls.learn, [['轮椅轴', '挂机套路']]);
     assert.equal(calls.brainChat, null);
-    assert.deepEqual(sent, [{ gid: 9, at: '555', msg: '已学习词条：轮椅轴 → 挂机套路' }]);
+    assert.deepEqual(sent, [{ gid: 9, msg: '已学习词条：轮椅轴 → 挂机套路' }]);
   });
 
   it('S10 纯 @（空问题）：固定提示回复不受插件化影响', async () => {
     const { send, sent } = mkApp();
     send(atEvent(''));
-    assert.deepEqual(sent, [{ gid: 9, at: '555', msg: '艾特Mon3tr干什么呀喵' }]); // 真 @ 提问者
+    assert.deepEqual(sent, [{ gid: 9, msg: '艾特Mon3tr干什么呀喵' }]); // 默认不 @ 人
   });
 
   it('紧贴 @ 无空格的整串不触发任何插件：落 S10 空@ 提示（2026-09 决策，见 architecture §8 坑 11）', async () => {
@@ -221,7 +229,7 @@ describe('createApp 全链（P3 五插件装配面）', () => {
         { type: 'text', data: { text: '总结' } }, // 无前导空格：紧贴 at 段
       ],
     });
-    assert.deepEqual(sent, [{ gid: 9, at: '555', msg: '艾特Mon3tr干什么呀喵' }]);
+    assert.deepEqual(sent, [{ gid: 9, msg: '艾特Mon3tr干什么呀喵' }]);
     assert.equal(calls.summarize, 0); // 不回显总结
     assert.equal(calls.brainChat, null);
   });

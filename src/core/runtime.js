@@ -204,6 +204,7 @@ export function createApp(config, overrides = {}) {
     backfillMinOfflineMinutes: config.backfill?.minOfflineMinutes ?? 5,
     autoSpeakGroups,
     autoSpeakWindow,
+    replyAtUser: llm.replyAtUser === true,
   });
   const summaryPlugin = createSummaryPlugin({
     store, summarizer, client, filterMessages,
