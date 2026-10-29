@@ -24,7 +24,7 @@ import { log, err } from '../core/platform/logger.js';
 const HELP = [
   '【MAA 指令】（仅主人）',
   'maa 状态 —— 连接与任务状态',
-  'maa 唤醒 —— 启动游戏到主界面',
+  'maa 唤醒 —— 启动游戏到主界面（模拟器未开会自动启动，最多等 2 分钟）',
   'maa 日常 [关卡] [次数] —— 一条龙：唤醒→公招→基建→信用→奖励（给关卡则加刷图）',
   'maa 刷图 <关卡> [次数] —— 如「maa 刷图 CE-6 5」',
   'maa 公招 [次数] —— 自动公招（默认 4 次）',
@@ -131,7 +131,8 @@ export function createMaaPlugin({
         }
         continue;
       }
-      if (job.state === 'running') continue;
+      // launching = worker 正在拉起模拟器/等待 adb（2026-10）；与 running 一样继续轮询
+      if (job.state === 'running' || job.state === 'launching') continue;
       send(ctx, summaryText(label, job));
       // 真抽卡结束后补一张结果截图（gacha 没有掉落回调，结果只能看画面）
       if (job.state === 'done' && label.startsWith('真抽卡')) {
@@ -186,13 +187,15 @@ export function createMaaPlugin({
     if (/^(帮助|help|指令)$/i.test(head)) return HELP;
     if (/^(状态|status)$/i.test(head)) {
       ensureBridge().then(() => bridge.status()).then((s) => {
-        const job = s.job && s.job.state === 'running'
-          ? `${(s.job.tasks || []).map((t) => t.type).join(' → ') || s.job.type} 进行中（${fmtElapsed((s.job.elapsed || 0) * 1000)}）`
+        const job = s.job && (s.job.state === 'running' || s.job.state === 'launching')
+          ? s.job.state === 'launching'
+            ? `正在启动模拟器/游戏（${fmtElapsed((s.job.elapsed || 0) * 1000)}）`
+            : `${(s.job.tasks || []).map((t) => t.type).join(' → ') || s.job.type} 进行中（${fmtElapsed((s.job.elapsed || 0) * 1000)}）`
           : '空闲';
         send(ctx, [
           '【MAA 状态】',
           `MaaCore：${s.version || '未知'}`,
-          `设备：${s.connected ? '已连接' : '未连接'}`,
+          `设备：${s.connected ? '已连接' : (s.emulator_configured ? '未连接（发「maa 唤醒」会自动启动模拟器）' : '未连接')}`,
           `任务：${job}`,
           s.last_error ? `备注：${s.last_error}` : '',
         ].filter(Boolean).join('\n'), true);
@@ -220,13 +223,13 @@ export function createMaaPlugin({
       return true;
     }
     if (/^(唤醒|启动|startup)$/i.test(head)) {
-      return submit(ctx, 'StartUp', { client_type: clientType }, '启动游戏');
+      return submit(ctx, 'StartUp', { client_type: clientType, start_game_enabled: true }, '启动游戏');
     }
     if (/^(日常|daily)$/i.test(head)) {
       // 一条龙：唤醒 → 公招 → 基建 → 信用 → 奖励（给了关卡再追加刷图，放在唤醒之后）
       const stage = rest[0];
       const times = Math.min(Math.max(parseInt(rest[1] || '5', 10) || 5, 1), 99);
-      const tasks = [{ type: 'StartUp', params: { client_type: clientType } }];
+      const tasks = [{ type: 'StartUp', params: { client_type: clientType, start_game_enabled: true } }];
       if (stage) tasks.push({ type: 'Fight', params: { stage, times, client_type: clientType } });
       tasks.push(
         { type: 'Recruit', params: { select: [4], confirm: [3, 4], times: 4 } },
@@ -267,7 +270,7 @@ export function createMaaPlugin({
       if (Date.now() > p.expiresAt) return '抽卡确认已过期，请重新发起';
       // 先 StartUp 确保在主界面，再执行抽卡任务链（从任何界面发起都稳）
       return submitMany(ctx, [
-        { type: 'StartUp', params: { client_type: clientType } },
+        { type: 'StartUp', params: { client_type: clientType, start_game_enabled: true } },
         { type: 'Custom', params: { task_names: [p.chain] } },
       ], `真抽卡·${p.label}`);
     }

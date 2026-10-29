@@ -125,7 +125,9 @@
     "gachaConfirmSeconds": 60,
     "workerPort": 0,
     "taskTimeoutMinutes": 60,
-    "pollIntervalSeconds": 2
+    "pollIntervalSeconds": 2,
+    "emulatorCommand": [],
+    "emulatorWaitSeconds": 120
   },
   "filter": {
     "enabled": true

@@ -116,7 +116,7 @@ describe('MAA 指令插件：指令解析与回执', () => {
     });
     plugin.handleMessage(ctx('maa 唤醒'));
     await tick(40);
-    assert.deepEqual(bridge.calls.submit[0], [{ type: 'StartUp', params: { client_type: 'Bilibili' } }]);
+    assert.deepEqual(bridge.calls.submit[0], [{ type: 'StartUp', params: { client_type: 'Bilibili', start_game_enabled: true } }]);
     assert.match(client.sent[0].msg, /启动游戏 已开始/);
   });
 
@@ -140,6 +140,40 @@ describe('MAA 指令插件：指令解析与回执', () => {
     plugin.handleMessage(ctx('maa 刷图 CE-6'));
     await tick(30);
     assert.match(sent[0].msg, /已有任务在跑/);
+  });
+
+  it('唤醒：launching 阶段不提前报失败，完成只回报一次', async () => {
+    const states = ['launching', 'running', 'done'];
+    const bridge = mkBridge();
+    let n = 0;
+    bridge.job = async () => {
+      const state = states[Math.min(n++, states.length - 1)];
+      return { id: 'j1', state, elapsed: 3, drops: {}, chains: [], error: '' };
+    };
+    const client = mkClient();
+    const plugin = createMaaPlugin({ bridge, client, ownerId: 10001, pollIntervalMs: 5, taskTimeoutMs: 5000 });
+    assert.equal(plugin.handleMessage(ctx('maa 唤醒')), true);
+    await tick(80);
+    // 回执（已开始）与最终结果都带【MAA】启动游戏：这里只数终态
+    const results = client.sent.filter((s) => /【MAA】启动游戏 (完成|失败|已停止)/.test(String(s.msg)));
+    assert.equal(results.length, 1);
+    assert.match(results[0].msg, /完成/);
+  });
+
+  it('状态：任务 launching 时显示「启动模拟器/游戏中」', async () => {
+    const bridge = mkBridge({ status: { job: { id: 'j1', state: 'launching', elapsed: 12, tasks: [{ type: 'StartUp' }] } } });
+    const { plugin, sent } = mkPlugin({ bridge });
+    plugin.handleMessage(ctx('maa 状态'));
+    await tick(20);
+    assert.match(sent[0].msg, /正在启动模拟器\/游戏/);
+  });
+
+  it('状态：未连接但可自动启动模拟器时给出提示', async () => {
+    const bridge = mkBridge({ status: { connected: false, emulator_configured: true } });
+    const { plugin, sent } = mkPlugin({ bridge });
+    plugin.handleMessage(ctx('maa 状态'));
+    await tick(20);
+    assert.match(sent[0].msg, /自动启动模拟器/);
   });
 
   it('状态：异步查询并真 @', async () => {
@@ -226,7 +260,7 @@ describe('MAA 指令插件：指令解析与回执', () => {
     assert.equal(plugin.handleMessage(ctx('maa 确认')), true);
     await tick(60);
     assert.deepEqual(bridge.calls.submit[0], [
-      { type: 'StartUp', params: { client_type: 'Official' } },
+      { type: 'StartUp', params: { client_type: 'Official', start_game_enabled: true } },
       { type: 'Custom', params: { task_names: ['GachaTenTimes'] } },
     ]);
     assert.match(sent[0].msg, /真抽卡·十连 已开始/);

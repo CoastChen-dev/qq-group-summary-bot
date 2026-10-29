@@ -38,13 +38,17 @@ export class MaaBridge {
    * @param {number} [opts.port=0] - worker 端口（0 = 系统分配）
    * @param {string} [opts.token] - 鉴权 token（默认随机）
    * @param {boolean} [opts.autoSpawn=true] - false 时只连已有 worker（测试用）
+   * @param {string[]} [opts.emulatorCmd] - 模拟器启动命令（argv）；缺省由 worker 自动探测 adb 同目录的
+   *   MuMuManager.exe（MuMu 12：`control -v 0 launch`）
+   * @param {number} [opts.emulatorWaitSeconds=120] - 启动模拟器后等待 adb 连上的秒数
    * @param {string} [opts.baseUrl=''] - 已有 worker 的地址（配了就不 spawn）
    * @param {number} [opts.timeoutMinutes=60] - 单个任务超时（worker 侧强制停止）
    */
   constructor({
     maaPath = '', python = 'python', adbPath = 'adb.exe', adbAddress = '127.0.0.1:5555',
     connectConfig = 'General', workerScript = '', port = 0, token = '', autoSpawn = true,
-    baseUrl = '', timeoutMinutes = 60, requestTimeoutMs = 15000,
+    baseUrl = '', timeoutMinutes = 60, emulatorCmd = null, emulatorWaitSeconds = 120,
+    requestTimeoutMs = 15000,
   } = {}) {
     this.maaPath = maaPath;
     this.python = python;
@@ -57,6 +61,9 @@ export class MaaBridge {
     this.autoSpawn = autoSpawn;
     this.baseUrl = baseUrl;
     this.timeoutMinutes = timeoutMinutes;
+    // 模拟器自动启动（2026-10）：worker 在设备未连接时用这条命令拉起模拟器（缺省自动探测 MuMu）
+    this.emulatorCmd = Array.isArray(emulatorCmd) && emulatorCmd.length ? emulatorCmd : null;
+    this.emulatorWaitSeconds = Math.max(10, Number(emulatorWaitSeconds) || 120);
     this.requestTimeoutMs = requestTimeoutMs;
     this.child = null;
     this.started = false;
@@ -108,7 +115,9 @@ export class MaaBridge {
         '--port', String(this.port),
         '--token', this.token,
         '--timeout-min', String(this.timeoutMinutes),
+        '--emulator-wait', String(this.emulatorWaitSeconds),
       ];
+      if (this.emulatorCmd) args.push('--emulator-cmd', JSON.stringify(this.emulatorCmd));
       log(`[maa] 启动 worker: ${this.python} ${this.workerScript}`);
       this.child = spawn(this.python, args, { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
       const deadline = Date.now() + 25000;

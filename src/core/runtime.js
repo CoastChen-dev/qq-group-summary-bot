@@ -281,6 +281,8 @@ export function createApp(config, overrides = {}) {
         port: maaCfg.workerPort ?? 0,
         token: maaCfg.token,
         timeoutMinutes: maaCfg.taskTimeoutMinutes ?? 60,
+        emulatorCmd: maaCfg.emulatorCommand,
+        emulatorWaitSeconds: maaCfg.emulatorWaitSeconds,
       })
     : null;
   const maaPlugin = maaBridge
