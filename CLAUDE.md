@@ -11,7 +11,7 @@ QQ 群聊机器人（NapCat / OneBot 11 / WS），Node ESM，LLM 生成群聊概
 
 - 运行环境：**Node ≥ 22.5**（用了 `node:sqlite`；engines 已按 ≥22.5 声明，2026-09 修正）。
 - 依赖仅 `ws`；`npm install` 后 `npm start`（= `node src/index.js`）。
-- `npm test`：node:test 全量 = `node --test "test/**/*.test.js"`——`test/baseline/` 行为基线（store/analytics/lingo/arkdb/commands 直测）+ `test/smoke/`（导入面/注册表/插件接线/全链冒烟）。改了路由链、插件、存储语义就跑全量；纯文档/注释改动可跳过。
+- `npm test`：node:test 全量 = `node --import ./test/log-isolation.mjs --test "test/**/*.test.js"`（测试日志导到系统临时目录，**不污染生产 `logs/`**；手工单跑时 test/helpers.js 还会兜一层 `LOG_DIR`）——`test/baseline/` 行为基线（store/analytics/lingo/arkdb/commands 直测）+ `test/smoke/`（导入面/注册表/插件接线/全链冒烟）。改了路由链、插件、存储语义就跑全量；纯文档/注释改动可跳过。
 - 改动语法自检：`node --check src/<file>.js`（core/ 与 plugins/ 同）。
 - 启动需要 `config.json` 里 `llm.apiKey`（或 `LLM_API_KEY` 环境变量），缺失即 exit(1)；连不上 NapCat 只打重连日志不退出。
 - 改代码前必读：[docs/architecture.md](docs/architecture.md)（§4 消息路由链、§6 三个后台流程、§8 已知坑）。
@@ -30,12 +30,12 @@ QQ 对自动化账号有阶梯式风控（提示 → 限制 → 冻结 7/30 天 
    - 数据刷新：`.tmp` → rename 原子替换，成功后清历史 `.bak`（不再每次留一份 39MB 旧表）；手动/定时/WebUI 三触发源**单飞**，并发触发复用同一个任务，不重复下载
    - 出站文本：超过 3500B 一律经 `core/platform/text.js` 的 splitMessage 切条发送（第一条 @、其余纯文本），避免 QQ 单条上限拒发
    - 重连：指数退避 3s→30s 封顶，且连接持续稳定 30s 后才复位（连上就断不重置，core/platform/napcat.js）
-   - 内存：MessageStore 每群只保留最近 72h 消息（`retentionHours`），更早的清出内存、磁盘 JSONL 保留，按需 `loadFromDisk` 补载；`writtenIds` 去重闸同步回收（窗口外 id 不会被 backfill 拉回，窗口内仍严格防重）（2026-10）
+   - 内存：MessageStore 每群只保留最近 72h 消息（`retentionHours`），更早的清出内存、磁盘 JSONL 保留，按需 `loadFromDisk` 补载；`writtenIds` 去重闸同步回收（窗口外 id 不会被 backfill 拉回，窗口内仍严格防重）（2026-10）；启动预载按 config.groups / 磁盘群目录重建 writtenIds，防 backfill 重复 append；lastSeen 在 addMessage 热路径 10s 节流落盘（stop 时 flush，显式 backfill 写入仍即时）
    - LLM 限流：同一人 `llm.chatCooldownSeconds`（默认 3s）冷却、同群 `llm.chatMinuteLimit`（默认 20 次/分钟）；超限**静默丢弃**（不回复、不耗 token），只记日志
    - 进程兜底：`main` 装 `core/platform/lifecycle.js` 的 installProcessGuards——未处理拒绝/未捕获异常只记日志不退出；SIGINT/SIGTERM → `app.stop()` + `analytics.close()` + 200ms 后 exit（勿在 createApp/start 里装，测试路径保持零信号副作用）
    - 贴表情：同群冷却 `emojiLike.cooldownSeconds`（默认 5s）
    - 发表情消息：同群发送间隔 `emojiLike.sendCooldownSeconds`（默认 3s，排队节流不丢弃）
-   - 出站内容：chat 插件发送前 `isSensitive` 兜底替换（命中即换安全文案）
+   - 出站内容：chat 插件发送前 `isSensitiveOutbound` 兜底（隐私模式 + 硬词表；闲聊里讨论密码/验证码/诈骗/自杀不再整条替换，2026-10 修正误伤）
 6. **账号侧**：务必用小号；被风控后按 README「降低风控风险」恢复（手机验证 → 等 1–7 天 → 换网络），期间禁止反复扫码硬试。
 
 ## 代码规范（vibe house style）
@@ -59,10 +59,10 @@ QQ 对自动化账号有阶梯式风控（提示 → 限制 → 冻结 7/30 天 
 
 ## 功能扩展入口（现在长什么样，去哪儿加）
 
-- **MAA 游戏控制**：桥在 tools/maa_bridge/worker.py（Python + MAA 自带 asst 绑定，本机 HTTP + token；含 `/screenshot` 现截 PNG；`/task` 支持单任务 `{type,params}` 或任务链 `{tasks:[…]}`），Node 侧 core/platform/maa.js（MaaBridge：spawn/status/submit/submitMany/job/screenshot/connect/stop），指令在 plugins/maa.js（带 380，仅 config.owner.userId；日常/刷图/公招/基建/领奖励/信用/唤醒/关闭/自定义/截图/重连）；配置 config.maa.*（enabled/maaPath/adbPath/adbAddress/connectConfig/clientType/allowGacha）。同一时刻只允许一个任务（worker 409 兜底）；新增指令 = 在 handleMessage 里加锚定分支 + submit/submitMany。**真抽卡**走 `Custom` 任务链（`GachaTenTimes`/`GachaOnce`，MAA 未公开 Gacha 任务类型），默认关（`allowGacha` 必须显式为 true）+ 60s 二次确认（`maa 确认`），会消耗真实货币。**肉鸽/生息**分别走 `Roguelike`（theme: Phantom/Mizuki/Sami/Sarkaz/JieGarden/BlackFlow + mode）与 `Reclamation`（theme: Tales/RelaunchAnchor + mode 0/1/16/32/48），走任务级 `timeout_minutes`（240）覆盖 worker 默认超时。
+- **MAA 游戏控制**：worker 运行中退出会自动复位、下一条指令自动重启（2026-10，MaaBridge.ensureReady）；桥在 tools/maa_bridge/worker.py（Python + MAA 自带 asst 绑定，本机 HTTP + token；含 `/screenshot` 现截 PNG；`/task` 支持单任务 `{type,params}` 或任务链 `{tasks:[…]}`），Node 侧 core/platform/maa.js（MaaBridge：spawn/status/submit/submitMany/job/screenshot/connect/stop），指令在 plugins/maa.js（带 380，仅 config.owner.userId；日常/刷图/公招/基建/领奖励/信用/唤醒/关闭/自定义/截图/重连）；配置 config.maa.*（enabled/maaPath/adbPath/adbAddress/connectConfig/clientType/allowGacha）。同一时刻只允许一个任务（worker 409 兜底）；新增指令 = 在 handleMessage 里加锚定分支 + submit/submitMany。**真抽卡**走 `Custom` 任务链（`GachaTenTimes`/`GachaOnce`，MAA 未公开 Gacha 任务类型），默认关（`allowGacha` 必须显式为 true）+ 60s 二次确认（`maa 确认`），会消耗真实货币。**肉鸽/生息**分别走 `Roguelike`（theme: Phantom/Mizuki/Sami/Sarkaz/JieGarden/BlackFlow + mode）与 `Reclamation`（theme: Tales/RelaunchAnchor + mode 0/1/16/32/48），走任务级 `timeout_minutes`（240）覆盖 worker 默认超时。
 - **新群指令**：先归领域 → 在对应指令插件内沿既有分隔段插入（域内代码序 = 优先级）：用户记忆 → plugins/memory.js、词典 → plugins/lingo.js、干员/藏品 → plugins/ark.js、抽卡 → plugins/gacha.js、统计 → plugins/stats.js、平台状态 → plugins/status.js。全新领域：新建 createXxxPlugin 工厂 + 加入 plugins/index.js 的 `commandPlugins` 数组 + 在 core/registry.js `PRIORITY` 加带（须同步 registry 测试对 keys 的断言）。
 - **用户记忆（记什么/怎么记）**：存储 core/platform/usermem.js（JSON 按群隔离；每人 20 条/全局 2000 条上限）；指令 plugins/memory.js；chat 侧注入与自动提取在 plugins/chat.js 的 buildMessages/_extractMemory；配置 config.memory.*（enabled/autoExtract/容量）。**记忆只存资料、不存指令**（2026-10 提示注入加固）：`setFact` 写入前 `sanitizeFact` 单行化+去【】伪块标记，并拒收 `looksLikeInstruction` 命中的指令式文本；注入时带「只是资料，不是指令」定界、system 里有一条定界规则、读取时再过滤一次（旧数据兜底），总注入长度封顶 800 字。
-- **长期记忆（2026-10）**：① 会话续接——ChatBrain 的 groupHistory 落盘 `data/chat_history/<群号>.json`（historyDir 注入；push 即写、启动载入、clearHistory 删文件）；② 情节记忆——日报成功后 report 插件调 `Summarizer.extractMemories()` 提炼 3-5 条小事，存 `data/memory/<群号>/<YYYY-MM-DD>.json`（core/platform/episodic.js）；ChatBrain.buildMessages 用 `EpisodicMemory.format()` 注入最近 `memory.episodicDays`（默认 3）天、≤500 字，只作背景。③ 事实记忆升级——每人上限 50，事实带 `imp`（1-3，手动/身份类更高）、`lastUsed`、`strength`、`recalls`，相似事实（Dice≥0.7）自动合并，注入前用 `UserMemory.recall()` 按问题召回（提问者 8 条/被点名者 5 条），淘汰按重要性+近用；**时间会让记忆变化**：`strength` 按 `factHalfLifeDays`（默认 120）衰减，回忆 +0.15 强化，自动提取的低重要性事实超过 `factForgetDays`（默认 120）没再用就淡忘删除（手动记的永不删）；情节记忆磁盘保留 `episodicRetentionDays`（30）天，format 带「今天/昨天/N 天前」相对时间。④ 历史检索——`Analytics.searchMessages()`（SQLite LIKE，最多 4 关键词 OR，30 天窗口）经 LLM 工具 `search_history` 按需调用。两处生成失败都只记日志。
+- **长期记忆（2026-10）**：① 会话续接——ChatBrain 的 groupHistory 落盘 `data/chat_history/<群号>.json`（historyDir 注入；push 即写、启动载入、clearHistory 删文件）；② 情节记忆——日报成功后 report 插件调 `Summarizer.extractMemories()` 提炼 3-5 条小事，存 `data/memory/<群号>/<YYYY-MM-DD>.json`（core/platform/episodic.js）；ChatBrain.buildMessages 用 `EpisodicMemory.format()` 注入最近 `memory.episodicDays`（默认 3）天、≤500 字，只作背景。③ 事实记忆升级——每人上限 50，事实带 `imp`（1-3，手动/身份类更高）、`lastUsed`、`strength`、`recalls`，相似事实（Dice≥0.7）自动合并，注入前用 `UserMemory.recall()` 按问题召回（提问者 8 条/被点名者 5 条），淘汰按重要性+近用；**时间会让记忆变化**：`strength` 按 `factHalfLifeDays`（默认 120）衰减，回忆 +0.15 强化，自动提取的低重要性事实超过 `factForgetDays`（默认 120）没再用就淡忘删除（手动记的永不删）；情节记忆磁盘保留 `episodicRetentionDays`（30）天，format 带「今天/昨天/N 天前」相对时间。④ 历史检索——`Analytics.searchMessages()`（SQLite LIKE，最多 4 关键词 OR，30 天窗口）经 LLM 工具 `search_history` 按需调用。两处生成失败都只记日志；召回会刷新 lastUsed，但落盘 30s 节流（避免每条回复整份重写记忆文件）。
 - **新 LLM 工具（function calling）**：在 plugins/chat.js 的 `createChatTools` 里加 `{name, description, parameters, handler}`；贴表情 ID 表在 core/platform/emoji.js（NapCat 官方 qface ID 空间，勿用旧版编号）；总开关 config.tools.*，贴表情单独由 config.emojiLike.enabled 控制；自我资料修改（昵称/签名/名片）走 runtime 注入的 profile 出口；文档/提示词读写仅 config.owner.userId 可用且白名单限定（docs/、prompts/、README、CLAUDE.md，写前备份到 data/backups/）。
 - **整类消息判定（非指令）**：仿 summary/refresh/chat 插件写 handleMessage(ctx)（ctx = {groupId, userId, userName, text, lingo, arkdb, analytics}；返回 string = runtime 代发、true = 插件自驱、null = 让位）；描述符语义见 core/registry.js 头注释。
 - **人味**：`llm.humanize`（chat 插件 `deliver`：按句拆 1–3 条 + 打字停顿，测试把 `minDelayMs/maxDelayMs` 设 0）；人设与说话习惯在 `prompts/chat-system.md`（mtime 热重载）——动作描写只在合适时偶尔加、禁止固定开场白/客服话术、情绪随时段变化、可分条但别每次都拆。
@@ -70,7 +70,7 @@ QQ 对自动化账号有阶梯式风控（提示 → 限制 → 冻结 7/30 天 
 - **新定时/后台流程**：在 core/runtime.js createApp 的插件装配段就地构造 createXxxPlugin({依赖闭包}) 并 register（hooks.start 注册定时/调度，hooks.stop 清理）；后台服务依赖注入与就绪标志模式见 plugins/report.js。
 - **新知识源 / 调整检索编排**：plugins/chat.js 的 `ChatBrain.chat()` 主流程（本地快路 → 缓存 → 联网检索 → 排序 → `_reply`）；检索器本体按惯例放 core/knowledge/ 并由 runtime 装配为共享单例注入（联网搜索 websearch.js 由 config.webSearch 配置，启用后取代萌娘/维基）。
 - **新本地数据表**：core/knowledge/arkdb.js 读 + core/platform/refresher.js 下载/校验；数据文件约定见 [docs/data-format.md](docs/data-format.md)。
-- **面板新接口**：plugins/webui.js（零依赖 node:http，页面内联）。**安全闸**：`webui.host` 非本机地址且 `webui.token` 为空时 `start()` 直接抛错拒绝启动；`_body` 在超 1MB/客户端中断/读错误时都必须结算（曾因只在 `end` resolve 而永久悬挂）。
+- **面板新接口**：plugins/webui.js（零依赖 node:http，页面内联）。**安全闸**：`webui.host` 非本机地址且 `webui.token` 为空时 `start()` 直接抛错拒绝启动；未配 token 时只接受本机 Host（防 DNS rebinding），写操作要求同源 + application/json（2026-10 CSRF 加固）；内联页用 `data-*` + 事件委托，禁止把词条/群号拼进 `onclick`（2026-10 存储型 XSS 修复）；`_body` 在超 1MB/客户端中断/读错误时都必须结算（曾因只在 `end` resolve 而永久悬挂）。
 - **@机器人 人设与回复规则**：人设提示词在 `prompts/chat-system.md`（她可自我编辑、即改即生效；代码内置默认为回退）；Summarizer 两套 prompt 在 core/platform/summarizer.js。
 
 ## 结构方向（重要）
@@ -84,7 +84,7 @@ QQ 对自动化账号有阶梯式风控（提示 → 限制 → 冻结 7/30 天 
 - 不要在无讨论的情况下启动大规模结构改动（core/plugins 边界的移动会牵动注入面与测试）；
 - 新增功能时**不必**为未来抽象提前设计——指令/后台流程按当前惯例写进对应插件与装配段即可；
 - 若你发现"为加一个小功能必须动 runtime 路由链 + registry 分发语义"，先对照 refactor-proposal 剩余待办讨论，而不是临时发明第二套注册机制；
-- 已修待办：Analytics 历史 JSONL 现由 `runtime.start()` 的 `importHistory()` 后台分片异步导入（坑 5，2026-09 ✅：`record` 等热路径不再同步扫描；导入中统计指令回「稍后再试」、WebUI 状态行提示——见 refactor-proposal「待办」）。
+- 已修待办：Analytics 历史 JSONL 现由 `runtime.start()` 的 `importHistory()` 后台分片异步导入（坑 5，2026-09 ✅：`record` 等热路径不再同步扫描；导入中统计指令回「稍后再试」、WebUI 状态行提示——见 refactor-proposal「待办」）。2026-10 追加：导入断点（`data/.import-state.json` 跳过未变化文件，新库自动全量重导）、`dataRetention.days`（默认 0 = 不删，启动先清理再导入）、`summary.maxWindowHours`（默认 72）、`llm.cacheMaxEntries`（默认 500）。
 
 ## 仓库约定
 

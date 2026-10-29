@@ -60,8 +60,8 @@
 ### 管理与工程
 
 - **Web 管理面板**（`http://127.0.0.1:5210`）：运行状态、词典增删、用户记忆查看/删除、数据刷新、配置查看（密钥脱敏）
-- **SQLite 分析层**：消息实时入库，支持 `活跃榜 [N天]` / `群统计` / 抽卡记录
-- **插件架构**：core（装配/路由/平台服务/知识单例）+ plugins（7 指令 + 5 功能插件），289 项测试（`npm test`，纯本地零网络）
+- **SQLite 分析层**：消息实时入库，支持 `活跃榜 [N天]` / `群统计` / 抽卡记录（活跃榜/群统计只统计当前群，2026-10）
+- **插件架构**：core（装配/路由/平台服务/知识单例）+ plugins（7 指令 + 5 功能插件），362 项测试（`npm test`，纯本地零网络；测试日志自动导到临时目录，不污染 `logs/`）
 - **风控降险内置**：backfill 节流、重连退避、贴表情冷却、出站过滤（见下）
 
 ## 指令一览
@@ -105,7 +105,7 @@ cp config.example.json config.json   # 复制模板后按需修改
 - `report.userId`：日报私聊接收人（不填不发日报）
 - `groups`：监控群白名单，`[]` = 全部群
 
-常用开关：`llm.chatEnabled`（AI 群聊）、`quiet`（静默时段）、`tools.enabled`（工具调用）、`emojiLike.enabled`（贴表情）、`memory.enabled`（用户记忆）、`webSearch.provider`（联网搜索源，默认 deepseek）、`owner.userId`（主人：文档/提示词编辑权限）、`webui.enabled`（管理面板）。完整键表见 [docs/config-reference.md](docs/config-reference.md)。
+常用开关：`llm.chatEnabled`（AI 群聊）、`quiet`（静默时段）、`tools.enabled`（工具调用）、`emojiLike.enabled`（贴表情）、`memory.enabled`（用户记忆）、`webSearch.provider`（联网搜索源，默认 deepseek）、`owner.userId`（主人：文档/提示词编辑权限）、`webui.enabled`（管理面板）、`dataRetention.days`（自动清理 N 天前消息，默认 0 = 不删）。完整键表见 [docs/config-reference.md](docs/config-reference.md)。
 
 ### 3. 本地干员数据库（可选，强烈推荐）
 
@@ -135,7 +135,7 @@ curl -o data/ark/gacha_table.json \
 ```bash
 npm install
 npm start          # 或 Windows 双击 start_bot.bat（后台运行）
-npm test           # 全量测试（纯本地，零网络）
+npm test           # 全量测试（纯本地零网络；测试日志走临时目录，LOG_DIR 可覆盖）
 ```
 
 看到 `QQ 群聊概括机器人已启动（仅 @ 触发总结；每日 9:00 发送昨日日报）` 即正常。
@@ -174,7 +174,7 @@ QQ 对自动化账号有阶梯式风控（提示 → 限制 → 冻结 → 永�
 - **贴表情节流**：同群 5s 冷却（`emojiLike.cooldownSeconds`）
 - **发表情节流**：同群 3s 发送间隔、排队发送不丢弃（`emojiLike.sendCooldownSeconds`）
 - **回复限流**：同一人 3s 冷却、同群 20 次/分钟（`llm.chatCooldownSeconds` / `llm.chatMinuteLimit`，0 = 不限）
-- **出站过滤**：AI 回复发送前敏感词兜底替换
+- **出站过滤**：AI 回复发送前只拦隐私模式与硬词（`isSensitiveOutbound`）——讨论「密码 / 诈骗 / 自杀」不再整条替换
 
 账号侧建议：
 
@@ -192,6 +192,7 @@ QQ 对自动化账号有阶梯式风控（提示 → 限制 → 冻结 → 永�
 - **LLM 报错**：检查 `llm.apiKey` / `baseUrl` / `model`
 - **日报没发送**：确认 `report.userId`、昨日消息数 ≥ `report.minMessages`（日报只统计昨日）
 - **重启后重复概括**：概括进度持久化在 `data/state/`，正常不会重复
+- **磁盘越来越大**：历史消息默认永久保留（`dataRetention.days` 默认 0）；设成如 `30` 会在每次启动时清理 30 天前的 JSONL 与 SQLite 行（先清理再导入）
 - **NapCat 提示「未找到对应版本的偏移数据」**：NapCat 对最新 QQ 的适配滞后，关注其更新
 
 ## 说明

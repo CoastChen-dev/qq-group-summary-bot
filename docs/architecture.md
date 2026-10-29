@@ -82,10 +82,10 @@ P1 起装配与启动拆两层：`createApp(config, overrides)` **纯装配零�
 1. 读配置（main）：`CONFIG_PATH` 环境变量 → `config.json`；`llm.apiKey` 缺失回退 `LLM_API_KEY`；仍空 → `err` + `process.exit(1)`。
 2. createApp 按依赖序构造（缺省全部实建，overrides 同名键覆盖实例）：
    `MessageStore(dataDir)`（建 data/messages/、data/state/）→ `NapCatClient(wsUrl, {selfId, accessToken})`（此刻不连）→ `Summarizer(llm)` → `Scheduler({dailyHour, dailyMinute})`（时刻取 `report.hour/minute`，缺省 9:00；旧 `schedule.*` 键废弃，见 §8 坑 1）→ `Analytics(dataDir/messages.db, dataDir/messages)`（SQLite 建表）→ `DataRefresher(dataDir/ark, dataRefresh)` → `UserMemory(dataDir/user_memory.json, memory)`（enabled=false 时为 null）→ 知识服务上移为共享单例：`LingoStore / ArkDB / KnowledgeCache / WikiRetriever / MoegirlRetriever / WikipediaRetriever / WebSearchRetriever` → `ChatBrain({cfg, lingo, arkdb, cache, wiki, moegirl, wikipedia, webSearch, usermem, memoryCfg, tools, toolsCfg})`（构造注入，替代旧 ChatBot 构造内 new 7 子服务）→ `PluginRegistry` → `createRouting(...)`（P5b：S1–S13 路由判定域工厂，core/routing.js；**先于插件注册**——report 插件依赖其产出的 getAllGroupIds）→ 就地构造插件并 register：commandPlugins（plugins/index.js 静态交付）+ summary/refresh/report/chat/webui 五工厂（依赖本闭包实例与就绪标志，createApp 内 createXxxPlugin(deps)）→ 预载 → `client.onEvent(onEvent)` 挂载路由（判定域挂载点）。
-3. 预载「今天」窗口：`for (gid of config.groups) store.loadFromDisk(gid)`（groups=[] 则什么都不预载；日报/概括按需另载日期段）。
-4. `start()`：注册 `SIGINT/SIGTERM`（stop() → `process.exit(0)`）→ `registry.startAll()`（按 priority 降序调插件 hooks.start，实际执行序：refresh 注册数据自动刷新定时器[§6.3 触发源 a] → report 排下一个每日日报[经 scheduler.start，触发时刻取 report.hour/minute（缺省 9:00）] → webui 按 `webui.enabled !== false` 起面板；旧 start 内 setTimeout/scheduler.start/WebUI 直建段全部迁入插件）→ `analytics.importHistory()`（2026-09 修复坑 5：历史 JSONL 后台异步导入，状态机 importState idle→running→done，见 data-format.md §3；异步执行不阻塞）→ `client.connect()`。
+3. 预载「今天」窗口：groups 非空按白名单、为空（= 跟踪全部群）按 `store.diskGroupIds()`（`data/messages/` 下群目录）逐群 `store.loadFromDisk(gid)`——重启后 `writtenIds` 由磁盘重建，backfill 不会把已落盘消息再追加一遍（2026-10）；日报/概括仍按需另载日期段。
+4. `start()`：注册 `SIGINT/SIGTERM`（stop() → `process.exit(0)`）→ `registry.startAll()`（按 priority 降序调插件 hooks.start，实际执行序：refresh 注册数据自动刷新定时器[§6.3 触发源 a] → report 排下一个每日日报[经 scheduler.start，触发时刻取 report.hour/minute（缺省 9:00）] → webui 按 `webui.enabled !== false` 起面板；旧 start 内 setTimeout/scheduler.start/WebUI 直建段全部迁入插件）→ 数据保留清理（`dataRetention.days > 0` 时先删超期 JSONL 与 SQLite 行，2026-10）→ `analytics.importHistory()`（2026-09 修复坑 5：历史 JSONL 后台异步导入，状态机 importState idle→running→done；2026-10 起带文件级断点，跳过未变化文件，见 data-format.md §3；异步执行不阻塞）→ `client.connect()`。
 5. WS open 后 NapCat 合成 `lifecycle/connect` 事件 → routing S1 段置 `state.ready/wsConnected`（state 为 runtime 与 routing 共享的可变状态对象）→ 回填 selfId（若 0）→ `backfillHistory()`（仅一次）。
-6. `stop()`（信号路径与测试共用）：`registry.stopAll()`（priority 逆序：webui 关面板 → report 停调度 → refresh 清定时器）→ `client.close()`。
+6. `stop()`（信号路径与测试共用）：`store.flushLastSeen()`（补写 10s 节流窗口内的水位，2026-10）→ `registry.stopAll()`（priority 逆序：webui 关面板 → report 停调度 → refresh 清定时器）→ `client.close()`。
 
 ## 4. 消息路由链（core/routing.js 判定段 S1–S7/S9/S10 + 插件分发带）
 
@@ -156,8 +156,8 @@ S# 编号保留为行为契约锚点（CLAUDE.md 红线与 refactor-proposal 保
 | 抽卡 | 抽卡记录/我的抽卡/抽卡统计 `[N]` | 最近 N 个 6★ 明细 + 累计统计（默认 10）；**必须先于"单抽/十连"规则**（顺序敏感，勿合并正则） |
 | 抽卡 | 整串 谁最欧/群欧皇/欧气榜 | SQLite 抽卡记录排行 |
 | 抽卡 | 单抽/N连（十连、一百连…）/抽卡 `[池]` | 真实卡池出率；无开放池降级常驻模拟；逐抽记库；**>10 抽改合并转发**（每节点一整辆十连；超单卡字节预算拆多卡，上限 1000 连，单卡失败回退文本） |
-| 统计（stats.js） | 活跃榜/活跃统计/活跃度 `[N天]` | 依赖 SQLite |
-| 统计 | 整串 群统计/消息统计 | |
+| 统计（stats.js） | 活跃榜/活跃统计/活跃度 `[N天]`（只统计本群，2026-10） | 依赖 SQLite；`topActive(days, groupId)` |
+| 统计 | 整串 群统计/消息统计（只统计本群，2026-10） | `groupStats(groupId)` |
 | 平台状态（status.js） | 整串 `#status` / `/status`（大小写不敏感） | 并发查询登录/版本/状态三接口；回账号、NapCat 版本、OneBot 协议、在线状态、WS、接口计数、耗时与 Bot 运行时长 |
 
 跨领域无前缀冲突；领域内顺序敏感点集中在抽卡域（记录先于抽卡）。
@@ -210,3 +210,31 @@ filter.js 零 import；plugins 间零互 import（服务一律经 createApp 注�
 9. ~~**lastSeenTs 是全局单值**（非按群），backfill 的起点由任一群的最后消息推进~~（2026-09 已修复）：现按群存储（`data/state/lastSeen.json` 的 `{"byGroup": {...}}`），backfill 每群独立起点 `max(该群水位, now−maxHours)`；旧 v1 单值形状启动时迁移播种到磁盘已知群目录（群号 String 归一存储）。修复动机：单群拉取失败时全局水位被其他群推高，失败群缺口永久错过。
 10. **node:sqlite 需 Node ≥22.5**：engines 已声明 ≥22.5（原 ≥18 过宽，2026-09 修复）。
 11. **总结关键词判定基准（既定语义，勿按旧行为回退）**：旧 S8 在剥 @ 前对**含 @ 的完整文本**判关键词（先于空 @ 判定）；现 summary 插件对**剥 @ 后问题文本**判（在 S10 之后）——详见 §4 要点。输入形态「紧贴 @ 无空格的整串且整串含关键词」（如文本「@PRTS总结」、at 段缺 name 时「@10001总结」）：旧代码触发手动总结，现代码回「艾特Mon3tr干什么呀喵」。**2026-09 决策：不回退**——有效文本必须与 @ 分隔，紧贴无空格的整串不应通过（更符合逻辑）；锁定测试在 test/smoke/runtime-dispatch.test.js（「紧贴 @ 无空格的整串不触发任何插件」）。剥 @ 后关键词仍完整（如「@机器人总结」被 `^@机器人\s*` 单独剥掉）时触发不受影响。
+
+12. **测试日志隔离（2026-10 修复）**：logger 默认写项目根 `logs/`，测试曾把单日生产日志写成 1.7 万行噪声（`mock.timers` 拨到未来日期还会生成假日志文件）。现 logger 支持 `LOG_DIR`、首次写日志才建目录；`npm test` 经 `test/log-isolation.mjs` 预加载把日志导到系统临时目录，`test/helpers.js` 直接跑单文件时再兜一层。
+
+13. **活跃榜/群统计必须按群（2026-10 修复）**：`Analytics.topActive(days, groupId)` / `groupStats(groupId)` 传群号只统计该群；stats 插件与 chat 工具都传 `ctx.groupId`（旧实现跨群聚合，会泄露别群成员名与全部群号）。不传 groupId 仍保留全群口径（兼容脚本/测试）。
+
+14. **状态文件原子写 + 损坏隔离（2026-10）**：词典/缓存/用户记忆/lastSeen/runtime/群状态/会话历史/情节记忆统一经 `core/platform/atomic.js` 的 `writeFileAtomic`（同目录 .tmp → rename）；解析失败时 `quarantineCorrupt` 把原文件改名为 `<file>.corrupt-<时间戳>` 留证，不再「静默空表 → 下次写入覆盖」。
+
+15. **WebUI 安全闸（2026-10）**：未配 token 时只接受本机 Host（防 DNS rebinding）；写操作要求同源 Origin + `Content-Type: application/json`（跨站表单/纯文本打不进来）；内联页改为 `data-*` + 事件委托，禁止把词条/群号拼进 `onclick`（反斜杠可穿透转义造成存储型 XSS）。
+
+16. **MAA 桥自愈（2026-10）**：worker 运行中退出会复位 `started/baseUrl`，`MaaBridge.ensureReady()` 在下一条指令前自动重启；初始启动阶段退出仍会 reject（不吞启动失败）。
+
+17. **对话总时长预算（2026-10）**：`llm.chatTotalTimeoutMs`（默认 180s）限制单次应答；工具轮之间按剩余预算收口，避免 4 轮 × 60s × 3 次尝试最坏占住信号量 12 分钟。
+
+18. **启动预载重建 writtenIds（2026-10）**：`config.groups` 为空时按 `store.diskGroupIds()` 预载「今天」窗口，重启后去重闸由磁盘重建，backfill 不再重复 append（历史 JSONL 曾出现 95 个重复 msg_id）。
+
+19. **日志不含 access_token（2026-10）**：NapCat 连接日志打码 `access_token=***`。
+
+20. **导入断点（2026-10）**：Analytics 把每个 JSONL 的 size/mtimeMs 记到 `data/.import-state.json`，重启跳过未变化文件；`countMessages()===0`（新库/删库）时忽略断点全量重导；断点写入失败只记日志。
+
+21. **lastSeen 节流落盘（2026-10）**：`addMessage` 热路径只推进内存水位、10s 节流落盘；`stop()` 前 `flushLastSeen()` 补写；显式 `setLastSeenTs`（backfill）仍即时落盘。
+
+22. **概括窗口上限（2026-10）**：`summary.maxWindowHours`（默认 72）——上次总结更早时只概括最近窗口并记日志，避免同步回读数万行（实测有 18 天/2.8 万行的场景）。
+
+23. **数据保留可配（2026-10，默认关）**：`dataRetention.days > 0` 时启动先删超期 JSONL 与 SQLite 行、再导入；默认 0 = 永不自动删除。
+
+24. **缓存条目上限（2026-10）**：`llm.cacheMaxEntries`（默认 500）按 cachedAt 淘汰最旧，防缓存文件无限增长。
+
+25. **日报兜底切条（2026-10）**：合并转发失败时的整条私聊文本经 `splitMessage` 切条发送，避免超过私聊单条上限。

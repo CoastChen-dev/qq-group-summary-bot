@@ -11,6 +11,7 @@
 |---|---|---|
 | `CONFIG_PATH` | 指定配置文件路径（缺省 `<项目根>/config.json`） | 最高 |
 | `LLM_API_KEY` | LLM API Key | **高于** `config.llm.apiKey`（仅当 config 内没写时回退） |
+| `LOG_DIR` | 日志目录（缺省 `<项目根>/logs`） | 最高；测试/多实例隔离用（`npm test` 自动指到临时目录） |
 
 启动时校验：`llm.apiKey` 与 `LLM_API_KEY` 都为空 → 打印错误并 `process.exit(1)`。
 
@@ -34,6 +35,8 @@
 | `tools.enabled` | boolean | `true` | ChatBrain（plugins/chat.js） | LLM 工具调用总开关（false 时请求不带 tools，仅纯聊天） |
 | `tools.maxRounds` | number | `3` | ChatBrain | 工具调用轮次上限（超出后末轮不带工具强制收口） |
 | `minMessages` | number | `1` | summary 插件（doSummary） | 手动总结低于该消息条数时跳过 |
+| `summary.maxWindowHours` | number | `72` | summary 插件 | 手动总结最多回看的小时数（上次总结更早时只概括最近窗口并记日志，避免同步回读数万行） |
+| `dataRetention.days` | number | `0`（不删） | runtime.start() | 启动时清理早于 N 天的 JSONL 与 SQLite 行（先清理再导入；默认关闭，见 data-format.md §3） |
 | `includeSelf` | boolean | `false` | routing（S3） | `true` 时机器人自己的消息也计入 |
 | `commands.manualSummary` | string[] | `['总结','/总结','#总结']` | summary 插件（分发带 900） | 手动总结触发关键词（剥 @ 后问题文本 includes 判定） |
 | `backfill.maxHours` | number | `72` | routing backfillHistory（core/routing.js） | 每群 lastSeen 的兜底上限；实际从该群 lastSeen 时刻起拉（按群水位，坑 9 修复后） |
@@ -95,6 +98,7 @@
 | `llm.autoSpeak.evalCooldownSeconds` | number | `20` | chat 插件 | 让模型判断「要不要接」的节流（不是概率决策；模型回 `<NO_REPLY>` 即不接） |
 | `llm.autoSpeak.maxPerHour` | number | `12` | chat 插件 | 同群每小时自动接话上限 |
 | `llm.chatMinuteLimit` | number | `20` | ChatBrain | 同群每分钟最多触发的 LLM 应答次数（超限静默丢弃；0 = 不限） |
+| `llm.chatTotalTimeoutMs` | number | `180000` | ChatBrain | 单次应答总时长预算（ms，0 = 不限）；工具轮之间按剩余预算收口，避免多轮重试长期占住并发信号量 |
 | `llm.retrievalGate` | boolean | `true` | ChatBrain | 检索门：闲聊消息跳过通用检索（提速）；false 恢复总是检索（`!== false` 视为开） |
 | `llm.thinking` | boolean \| `'auto'` | `'auto'` | ChatBrain | 深度思考：`true` 恒开 / `false` 恒关 / `auto` 仅重问题（数学/证明/代码类，见 `HEAVY_RE`）开启 |
 | `llm.reasoningEffort` | string | `''` | ChatBrain | 思考强度（如 `high`，透传 `reasoning_effort`；空则用服务端默认） |
@@ -104,6 +108,7 @@
 | `llm.lingoFile` | string | `<root>/data/lingo.json` | LingoStore（core/knowledge/lingo.js） | 相对路径按 cwd 解析（与 arkdbDir/cacheFile 一致） |
 | `llm.cacheFile` | string | `<root>/data/knowledge_cache.json` | KnowledgeCache（core/knowledge/cache.js） | 同上 |
 | `llm.cacheTtlHours` | number | `168` | KnowledgeCache | 缓存 TTL；命中不续期 |
+| `llm.cacheMaxEntries` | number | `500` | KnowledgeCache | 缓存条目上限；超过按 cachedAt 淘汰最旧（防缓存文件无限增长） |
 | `llm.arkdbDir` | string | `<root>/data/ark` | ArkDB（core/knowledge/arkdb.js） | 方舟数据目录 |
 | `llm.wikiEnabled` | boolean | `true` | WikiRetriever（core/knowledge/wiki.js） | PRTS.Wiki 检索开关（`!== false`） |
 | `llm.wikiApiUrl` | string | `https://prts.wiki/api.php` | WikiRetriever | |
