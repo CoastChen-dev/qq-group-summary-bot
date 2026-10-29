@@ -250,3 +250,5 @@ filter.js 零 import；plugins 间零互 import（服务一律经 createApp 注�
 29. **日报启动补跑（2026-10）**：`data/state/report.json` 记 `lastReportDate`；启动/断线错过 9:00 时由 report 插件定时检查补跑一次，同日不重复（详见 §6.2）。
 
 30. **MAA 模拟器自动启动（2026-10）**：worker 的 `/task` 先返回 `state=launching` 的 job（HTTP 不再卡在模拟器启动上），后台线程 `ensure_emulator()`：连接失败 → 按 `--emulator-cmd`（缺省自动探测 adb 同目录 `MuMuManager.exe control -v 0 launch`）拉起模拟器 → 每 3s 重试 adb/AsstConnect 直到 `--emulator-wait` 秒 → 追加 MAA 任务并 `AsstStart`。launching 阶段 `stop` 不会提交任务；maa 插件的 `watchJob` 把 `launching` 视为进行中，`maa 状态` 显示「正在启动模拟器/游戏」。**StartUp 任务必须带 `start_game_enabled: true`**（MAA API 缺省 false，只等界面不拉起游戏；worker 对 StartUp 参数自动补齐，插件显式传值）。
+
+31. **人味增强（2026-10）**：`prompts/chat-system.md` 增加「群聊习惯」段（先反应再回答 / 只说对方要的那一点 / 短句碎句 / 允许不确定 / 可以平淡 / 不列点不客服腔），并去掉「助手」「百科全书」框架；`buildMessages` 给**所有**回复注入「当前时间 + 时段状态」（原仅 autoSpeak）；`deliver` 首条延迟按问题长度加「阅读时间」并 ±20% 抖动、40 字起按句分条；autoSpeak 的 `<NO_REPLY>` 容忍尾随标点、busy 释放挪到分条发完后，避免两轮接话交错。
