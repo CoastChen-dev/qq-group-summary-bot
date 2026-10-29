@@ -247,8 +247,9 @@ export function createApp(config, overrides = {}) {
     // 像真人打字：分 1-3 条短消息 + 打字停顿（config.llm.humanize）
     humanize: {
       enabled: llm.humanize?.enabled !== false,
-      minDelayMs: llm.humanize?.minDelayMs ?? 1000,
-      maxDelayMs: llm.humanize?.maxDelayMs ?? 5000,
+      minDelayMs: llm.humanize?.minDelayMs ?? 1200,
+      maxDelayMs: llm.humanize?.maxDelayMs ?? 9000,
+      typingMsPerChar: llm.humanize?.typingMsPerChar ?? 70,
       maxBubbles: llm.humanize?.maxBubbles ?? 3,
     },
     // 最近群聊语境（免 @ 接话用）：内存里最近 10 分钟的消息，排除当前这条

@@ -1373,8 +1373,10 @@ export function createChatPlugin(deps) {
   // ---- 像真人打字：把回复拆成 1-3 条短消息，并加一点「思考/打字」延迟 ----
   const humanizeCfg = deps.humanize || {};
   const humanizeOn = humanizeCfg.enabled === true;
-  const minDelay = Math.max(0, Number(humanizeCfg.minDelayMs ?? 400));
-  const maxDelay = Math.max(minDelay, Number(humanizeCfg.maxDelayMs ?? 1800));
+  const minDelay = Math.max(0, Number(humanizeCfg.minDelayMs ?? 1200));
+  const maxDelay = Math.max(minDelay, Number(humanizeCfg.maxDelayMs ?? 9000));
+  // 打字速度（毫秒/字）：按回复字数累加，模拟真人逐字输入（2026-10）
+  const typingMsPerChar = Math.max(0, Number(humanizeCfg.typingMsPerChar ?? 70));
   const maxBubbles = Math.max(1, Number(humanizeCfg.maxBubbles ?? 3));
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -1409,12 +1411,13 @@ export function createChatPlugin(deps) {
   /** 发一条回复：分条 + 停顿（humanize 关闭时退回纯切条、零延迟） */
   async function deliver(ctx, text, { at = false, question = '' } = {}) {
     const bubbles = humanizeOn ? splitBubbles(text) : splitMessage(text);
-    // 先「读」再「打字」：问题越长，首条消息来得越晚（封顶 2.2s，再受 maxDelay 约束）
+    // 先「读」再「打字」：问题越长首条越晚；每条按字数给打字时间（再受 maxDelay 封顶）
     const readMs = Math.min(2200, String(question || '').length * 20);
     for (let i = 0; i < bubbles.length; i++) {
       if (humanizeOn) {
-        const base = i === 0 ? minDelay + readMs : minDelay * 0.8;
-        const delay = Math.min(maxDelay, base + Math.min(bubbles[i].length, 160) * 12);
+        const typeMs = Math.min(bubbles[i].length, 160) * typingMsPerChar;
+        const base = i === 0 ? minDelay + readMs : Math.round(minDelay * 0.3);
+        const delay = Math.min(maxDelay, base + typeMs);
         const wait = jitter(delay);
         if (wait > 0) await sleep(wait);
       }
