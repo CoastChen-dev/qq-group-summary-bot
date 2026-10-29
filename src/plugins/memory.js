@@ -39,6 +39,8 @@ export function createMemoryPlugin() {
         const text = m[2].trim();
         if (text.length < 2) return '要记住的内容太短了，说「记住 …」就行';
         const r = ctx.memory.setFact(ctx.groupId, ctx.userId, ctx.userName, text, 'manual');
+        // setFact 会拒收指令式/不合规内容（ok:false，2026-10 提示注入加固）——不能假报成功
+        if (r.ok === false) return `没记住：${r.reason || '内容不合规'}`;
         return r.dup ? `这个我已经记住啦：${text}` : `（认真记下）记住了，博士：${text}`;
       }
 

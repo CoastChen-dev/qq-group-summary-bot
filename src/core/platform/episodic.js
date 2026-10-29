@@ -11,6 +11,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { log } from './logger.js';
+import { writeFileAtomic } from './atomic.js';
 
 /** 群号 → 安全目录名（防路径穿越） */
 const safeGid = (gid) => String(gid ?? '').replace(/[^\w.-]/g, '_');
@@ -52,10 +53,9 @@ export class EpisodicMemory {
       .slice(0, 5);
     if (!list.length || !date) return false;
     try {
-      fs.mkdirSync(this._groupDir(gid), { recursive: true });
-      fs.writeFileSync(this._file(gid, date), JSON.stringify({
+      writeFileAtomic(this._file(gid, date), JSON.stringify({
         date, items: list, generatedAt: Math.floor(Date.now() / 1000),
-      }));
+      })); // 原子替换（2026-10）
       this._pruneOld(gid);
       return true;
     } catch (e) {

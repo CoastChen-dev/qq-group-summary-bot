@@ -71,3 +71,65 @@ describe('WebUI 启动防护', () => {
     ui.stop();
   });
 });
+
+describe('WebUI 安全闸（2026-10）', () => {
+  function fakeRes() {
+    return {
+      statusCode: 0,
+      headers: {},
+      body: '',
+      writeHead(code, headers) { this.statusCode = code; this.headers = headers || {}; },
+      end(body) { this.body = body || ''; },
+    };
+  }
+
+  function reqOf({ method = 'GET', url = '/api/status', headers = {}, body = '' } = {}) {
+    const req = new EventEmitter();
+    req.method = method;
+    req.url = url;
+    req.headers = headers;
+    req.destroyed = false;
+    req.destroy = () => { req.destroyed = true; req.emit('close'); };
+    if (body) process.nextTick(() => { req.emit('data', body); req.emit('end'); });
+    else if (method === 'POST') process.nextTick(() => req.emit('end'));
+    return req;
+  }
+
+  it('内联页不再用 onclick 拼接词条/群号（存储型 XSS 修复）', () => {
+    const html = new WebUI({})._html();
+    assert.ok(!html.includes('onclick="del'));
+    assert.ok(html.includes('data-term='));
+    assert.ok(html.includes('data-index='));
+  });
+
+  it('跨站 Origin 的写请求 → 403', async () => {
+    const ui = new WebUI({});
+    const res = fakeRes();
+    await ui._handle(reqOf({
+      method: 'POST',
+      url: '/api/memory',
+      headers: { host: '127.0.0.1:5210', origin: 'http://evil.example', 'content-type': 'application/json' },
+      body: '{}',
+    }), res);
+    assert.equal(res.statusCode, 403);
+  });
+
+  it('非 JSON Content-Type 的 POST → 415', async () => {
+    const ui = new WebUI({});
+    const res = fakeRes();
+    await ui._handle(reqOf({
+      method: 'POST',
+      url: '/api/memory',
+      headers: { host: '127.0.0.1:5210', origin: 'http://127.0.0.1:5210', 'content-type': 'text/plain' },
+      body: '{}',
+    }), res);
+    assert.equal(res.statusCode, 415);
+  });
+
+  it('未配 token 时非本机 Host（DNS rebinding）→ 403', async () => {
+    const ui = new WebUI({});
+    const res = fakeRes();
+    await ui._handle(reqOf({ method: 'GET', url: '/api/status', headers: { host: 'evil.example' } }), res);
+    assert.equal(res.statusCode, 403);
+  });
+});

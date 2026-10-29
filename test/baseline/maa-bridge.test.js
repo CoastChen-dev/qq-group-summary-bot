@@ -117,3 +117,35 @@ describe('MaaBridge HTTP 客户端', () => {
     await assert.rejects(() => bridge.status(), /未启动/);
   });
 });
+
+describe('MaaBridge 自愈（2026-10）', () => {
+  it('ensureReady：未就绪才调用 start()，已就绪不重复启动', async () => {
+    const bridge = new MaaBridge({ baseUrl: 'http://127.0.0.1:1', autoSpawn: false });
+    let started = 0;
+    bridge.start = async () => { started++; bridge.started = true; bridge.baseUrl = 'http://127.0.0.1:1'; };
+    await bridge.ensureReady();
+    await bridge.ensureReady();
+    assert.equal(started, 1);
+  });
+
+  it('worker 运行中退出：复位 started/baseUrl，下一次 ensureReady() 会自动重启', async () => {
+    const bridge = new MaaBridge({ baseUrl: 'http://127.0.0.1:1', autoSpawn: false });
+    bridge.started = true;
+    bridge._onChildExit(1, null);
+    assert.equal(bridge.started, false);
+    assert.equal(bridge.baseUrl, '');
+    let started = 0;
+    bridge.start = async () => { started++; bridge.started = true; bridge.baseUrl = 'http://127.0.0.1:1'; };
+    await bridge.ensureReady();
+    assert.equal(started, 1);
+  });
+
+  it('初始启动阶段退出：仍以 MaaBridgeError reject（不吞掉启动失败）', () => {
+    const bridge = new MaaBridge({ baseUrl: '', autoSpawn: false });
+    bridge.started = false;
+    let err = null;
+    bridge._onChildExit(2, (e) => { err = e; });
+    assert.ok(err instanceof MaaBridgeError);
+    assert.match(err.message, /worker 退出 \(2\)/);
+  });
+});

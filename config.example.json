@@ -29,6 +29,7 @@
     },
     "chatCooldownSeconds": 3,
     "chatMinuteLimit": 20,
+    "chatTotalTimeoutMs": 180000,
     "defaultReply": "抱歉，我现在不方便回复，稍后再试试吧~",
     "wikiEnabled": true,
     "wikiApiUrl": "https://prts.wiki/api.php",
@@ -41,6 +42,7 @@
     "lingoFile": "./data/lingo.json",
     "cacheFile": "./data/knowledge_cache.json",
     "cacheTtlHours": 168,
+    "cacheMaxEntries": 500,
     "arkdbDir": "./data/ark",
     "chatConcurrency": 3,
     "retrievalGate": true,
@@ -51,6 +53,7 @@
     "wikipediaTopK": 2
   },
   "minMessages": 5,
+  "summary": { "maxWindowHours": 72 },
   "includeSelf": false,
   "dataDir": "./data",
   "report": {
@@ -92,6 +95,7 @@
     "firstDelayMinutes": 30,
     "announce": false
   },
+  "dataRetention": { "days": 0 },
   "memory": {
     "enabled": true,
     "file": "./data/user_memory.json",

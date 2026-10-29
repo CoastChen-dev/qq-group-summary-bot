@@ -412,3 +412,53 @@ describe('MessageStore 内存保留窗口（2026-10：常驻内存只涨不减�
     assert.deepEqual(store.collectRange(GID, 0, 2e9).map((r) => r.id), ['old', 'new']);
   });
 });
+
+describe('diskGroupIds（2026-10 启动预载枚举）', () => {
+  it('列出 data/messages 下的群目录；没有群目录时为空数组', () => {
+    const dir = makeTmp();
+    const store = new MessageStore(dir);
+    assert.deepEqual(store.diskGroupIds(), []);
+    fs.mkdirSync(path.join(dir, 'messages', '12345'), { recursive: true });
+    fs.mkdirSync(path.join(dir, 'messages', '67890'), { recursive: true });
+    assert.deepEqual(store.diskGroupIds().sort(), ['12345', '67890']);
+  });
+});
+
+describe('lastSeen 节流与磁盘保留（2026-10）', () => {
+  it('addMessage 热路径只推进内存；flushLastSeen 后跨实例可见最新水位', () => {
+    const dir = makeTmp();
+    const store = new MessageStore(dir);
+    store.addMessage(makeEvent({ message_id: 'm1', time: 1790000000 }));
+    store.addMessage(makeEvent({ message_id: 'm2', time: 1790000100 }));
+    assert.equal(store.getLastSeenTs(GID), 1790000100); // 内存即时推进
+    store.flushLastSeen(); // 10s 节流窗口内的 dirty 由停服 flush 补写
+    const store2 = new MessageStore(dir);
+    assert.equal(store2.getLastSeenTs(GID), 1790000100);
+  });
+
+  it('显式 setLastSeenTs（backfill 路径）仍即时落盘', () => {
+    const dir = makeTmp();
+    const store = new MessageStore(dir);
+    store.setLastSeenTs('gA', 500);
+    store.setLastSeenTs('gB', 700);
+    const store2 = new MessageStore(dir);
+    assert.equal(store2.getLastSeenTs('gA'), 500);
+    assert.equal(store2.getLastSeenTs('gB'), 700);
+  });
+
+  it('pruneDiskBefore：删除早于日期的 JSONL 分片，保留新分片', () => {
+    const dir = makeTmp();
+    const store = new MessageStore(dir);
+    const gdir = path.join(dir, 'messages', GID);
+    fs.mkdirSync(gdir, { recursive: true });
+    const line = (id, date) => JSON.stringify({
+      id, time: Math.floor(new Date(`${date}T00:00:00`).getTime() / 1000), userId: 'u', name: 'n', text: 't',
+    }) + '\n';
+    fs.writeFileSync(path.join(gdir, '2026-01-01.jsonl'), line('a', '2026-01-01'));
+    fs.writeFileSync(path.join(gdir, '2026-02-01.jsonl'), line('b', '2026-02-01'));
+
+    const cut = Math.floor(new Date('2026-01-15T00:00:00').getTime() / 1000);
+    assert.equal(store.pruneDiskBefore(cut), 1);
+    assert.deepEqual(fs.readdirSync(gdir), ['2026-02-01.jsonl']);
+  });
+});

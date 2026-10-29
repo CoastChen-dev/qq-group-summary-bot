@@ -111,7 +111,10 @@ export function createApp(config, overrides = {}) {
   // 同时供指令插件 ctx（S12）与 getStatus/refreshData/WebUI 借用同一实例（事实共享单例语义不变）
   const lingo = overrides.lingo || new LingoStore(llm.lingoFile);
   const arkdb = overrides.arkdb || new ArkDB(llm.arkdbDir);
-  const cache = overrides.cache || new KnowledgeCache(llm.cacheFile, { ttlHours: llm.cacheTtlHours ?? 168 });
+  const cache = overrides.cache || new KnowledgeCache(llm.cacheFile, {
+    ttlHours: llm.cacheTtlHours ?? 168,
+    maxEntries: llm.cacheMaxEntries ?? 500,
+  });
   const wiki = overrides.wiki || new WikiRetriever(llm);
   const moegirl = overrides.moegirl || new MoegirlRetriever(llm);
   const wikipedia = overrides.wikipedia || new WikipediaRetriever(llm);
@@ -220,6 +223,7 @@ export function createApp(config, overrides = {}) {
     store, summarizer, client, filterMessages,
     minMessages,
     manualCmds,
+    maxWindowHours: config.summary?.maxWindowHours ?? 72,
     isReady: () => state.ready,
   });
   const refreshPlugin = createRefreshPlugin({
@@ -302,8 +306,11 @@ export function createApp(config, overrides = {}) {
     return refreshPlugin.api.refresh(notifyGroupId);
   }
 
-  // 预载「今天」窗口到内存（§3 步骤 4）：groups 为空数组时什么都不预载；日报/概括按需另载日期段
-  for (const gid of trackedGroups()) {
+  // 预载「今天」窗口到内存（§3 步骤 4）：groups 非空按白名单预载；空数组（跟踪全部群）时
+  // 按磁盘上出现过的群目录预载——重启后 writtenIds 由磁盘重建，避免 backfill 把已落盘消息
+  // 再 append 一遍（2026-10：历史 JSONL 实测出现过 95 个重复 msg_id）。日报/概括仍按需另载。
+  const preloadGroups = trackedGroups().length > 0 ? trackedGroups() : (store.diskGroupIds?.() || []);
+  for (const gid of preloadGroups) {
     store.loadFromDisk(gid);
   }
 
@@ -346,6 +353,22 @@ export function createApp(config, overrides = {}) {
     // 9:00 → webui hooks.start 按 webui.enabled !== false 起面板
     registry.startAll();
 
+    // 数据保留（2026-10，默认关闭）：dataRetention.days > 0 时先删超期磁盘 JSONL 与 SQLite 行，
+    // 再执行导入——顺序不能反，否则刚删的行会被 JSONL 重新导回。清理边界取「本地自然日 0 点」：
+    // 文件按日期整片删、SQLite 按 < 该日 0 点删，两边对齐，导入不会把边界日期删掉的行补回来。
+    const retentionDays = Math.floor(Math.max(0, Number(config.dataRetention?.days ?? 0)));
+    if (retentionDays > 0) {
+      const now = new Date();
+      const cutoff = Math.floor(new Date(now.getFullYear(), now.getMonth(), now.getDate() - retentionDays).getTime() / 1000);
+      try {
+        const files = store.pruneDiskBefore?.(cutoff) ?? 0;
+        const rows = analytics.pruneBefore?.(cutoff) ?? 0;
+        log(`[retention] 已清理 ${retentionDays} 天前的数据：JSONL ${files} 个文件、SQLite ${rows} 行`);
+      } catch (e) {
+        err('[retention] 数据清理失败，继续启动:', e.message);
+      }
+    }
+
     // 历史 JSONL 后台导入（坑 5 修复）：状态机 idle→running→done；analytics 内部已按
     // 文件/批次容错只记日志，此处 catch 仅兜意外整体异常、不打断后续启动
     analytics.importHistory().catch((e) => err('历史消息导入失败:', e.message));
@@ -358,6 +381,8 @@ export function createApp(config, overrides = {}) {
 
   /** 优雅停服（退出信号与测试共用）：registry.stopAll（webui 关面板、report 停调度、refresh 清定时器）→ 关 WS；不 exit（信号路径自行 exit） */
   function stop() {
+    // 节流落盘的 lastSeen 水位在停服前补一次（2026-10）
+    try { store.flushLastSeen?.(); } catch { /* 忽略 */ }
     registry.stopAll();
     client.close();
   }

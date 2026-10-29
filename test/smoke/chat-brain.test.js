@@ -515,3 +515,23 @@ describe('ChatBrain 工具调用（function calling）', () => {
     assert.ok((await read.handler({ path: 'prompts/chat-system.md' }, { userId: '1' })).includes('只有博士'));
   });
 });
+
+describe('对话总时长预算（2026-10）', () => {
+  it('超过 chatTotalTimeoutMs：工具轮之间收口抛错，不再无限续轮', async () => {
+    const brain = new ChatBrain({ cfg: { apiKey: 'k', chatTotalTimeoutMs: 20 } });
+    brain.toolsEnabled = true;
+    brain.tools = [{ name: 't', description: '', parameters: {}, handler: async () => 'ok' }];
+    brain.maxToolRounds = 1;
+    let calls = 0;
+    brain._postChat = async () => {
+      calls++;
+      await new Promise((r) => setTimeout(r, 30));
+      return { content: '', tool_calls: [{ id: 'c1', function: { name: 't', arguments: '{}' } }] };
+    };
+    await assert.rejects(
+      () => brain._llmChat([{ role: 'user', content: 'hi' }], { heavy: false }),
+      /总耗时/,
+    );
+    assert.equal(calls, 1);
+  });
+});

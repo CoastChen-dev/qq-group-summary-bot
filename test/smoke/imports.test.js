@@ -26,6 +26,7 @@ const EXPECTED_EXPORTS = {
   'core/platform/http.js': ['fetchRetry'],
   'core/platform/logger.js': ['log', 'err'],
   'core/platform/lifecycle.js': ['installProcessGuards'],
+  'core/platform/atomic.js': ['writeFileAtomic', 'quarantineCorrupt'],
   'core/platform/maa.js': ['MaaBridge', 'MaaBridgeError'],
   'core/platform/napcat.js': ['NapCatClient'],
   'core/platform/refresher.js': ['DataRefresher'],

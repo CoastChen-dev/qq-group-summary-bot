@@ -7,6 +7,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { log } from '../platform/logger.js';
+import { writeFileAtomic, quarantineCorrupt } from '../platform/atomic.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // knowledge/（P5a 归类）比原 src/ 深两层：项目根 = __dirname/../../..（config 缺省时才用此默认）
@@ -18,12 +19,16 @@ const DEFAULT_CACHE_FILE = path.resolve(__dirname, '..', '..', '..', 'data', 'kn
 export class KnowledgeCache {
   /**
    * @param {string} [filePath] - 缓存文件路径，缺省 data/knowledge_cache.json
-   * @param {{ttlHours?: number}} [opts] - 条目的有效期小时数，缺省 168（7 天）
+   * @param {{ttlHours?: number, maxEntries?: number}} [opts] - 条目有效期小时数（缺省 168）
+   *   与条目上限（缺省 500，超出按 cachedAt 淘汰最旧，2026-10）
    * 副作用：确保缓存目录存在，并尝试加载既有缓存
    */
-  constructor(filePath = DEFAULT_CACHE_FILE, { ttlHours = 168 } = {}) {
+  constructor(filePath = DEFAULT_CACHE_FILE, { ttlHours = 168, maxEntries = 500 } = {}) {
     this.filePath = filePath;
     this.ttlMs = ttlHours * 3600 * 1000;
+    // 条目上限（2026-10）：缓存键是完整问题文本，长期运行会无上限膨胀；超过上限按 cachedAt
+    // 淘汰最旧的条目（热词条因最近被 set 覆盖而更晚淘汰）
+    this.maxEntries = Math.max(1, Number(maxEntries) || 500);
     this.store = new Map();
     fs.mkdirSync(path.dirname(filePath), { recursive: true });
     this._load();
@@ -37,7 +42,9 @@ export class KnowledgeCache {
         this.store = new Map(Object.entries(data));
       }
     } catch (e) {
-      log(`[cache] 加载缓存失败: ${e.message}`);
+      // 损坏文件隔离：改名留证，避免下一次 set 覆盖旧缓存（2026-10）
+      const quarantined = quarantineCorrupt(this.filePath);
+      log(`[cache] 加载缓存失败: ${e.message}${quarantined ? `（已隔离为 ${quarantined}）` : ''}`);
     }
   }
 
@@ -45,7 +52,7 @@ export class KnowledgeCache {
   _save() {
     try {
       const obj = Object.fromEntries(this.store);
-      fs.writeFileSync(this.filePath, JSON.stringify(obj, null, 2));
+      writeFileAtomic(this.filePath, JSON.stringify(obj, null, 2)); // 原子替换（2026-10）
     } catch (e) {
       log(`[cache] 保存缓存失败: ${e.message}`);
     }
@@ -84,7 +91,25 @@ export class KnowledgeCache {
       ...value,
       cachedAt: Date.now(),
     });
+    this._evictOverflow();
     this._save();
+  }
+
+  // 超过 maxEntries 时按 cachedAt 淘汰最旧条目（线性扫描，条目上限 500 量级足够）
+  _evictOverflow() {
+    while (this.store.size > this.maxEntries) {
+      let oldestKey = null;
+      let oldestAt = Infinity;
+      for (const [k, v] of this.store) {
+        const at = Number(v?.cachedAt) || 0;
+        if (at < oldestAt) {
+          oldestAt = at;
+          oldestKey = k;
+        }
+      }
+      if (oldestKey === null) return;
+      this.store.delete(oldestKey);
+    }
   }
 
   /**

@@ -13,6 +13,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { log } from './logger.js';
+import { writeFileAtomic, quarantineCorrupt } from './atomic.js';
 
 // 记忆只存「资料」，不存「指令」：命中以下模式的内容一律拒收（2026-10 提示注入加固）。
 // 误杀风险：只收对助手下命令的句式（忽略规则/system prompt/你必须只回复…），普通偏好不受影响
@@ -100,6 +101,7 @@ export class UserMemory {
     this.forgetDays = Math.max(1, Number(forgetDays) || 120);
     this.halfLifeDays = Math.max(1, Number(halfLifeDays) || 120);
     this.groups = new Map(); // 群号(String) -> Map(QQ(String) -> {name, updatedAt, facts})
+    this._lastSaveAt = 0; // 上次落盘时间（recall 节流用，2026-10）
     this._load();
   }
 
@@ -136,7 +138,9 @@ export class UserMemory {
         this._save();
       }
     } catch (e) {
-      log(`[usermem] 记忆文件加载失败: ${e.message}`);
+      // 损坏文件隔离：整库放弃前先改名留证（2026-10：避免下一次 _save 覆盖旧记忆）
+      const quarantined = quarantineCorrupt(this.file);
+      log(`[usermem] 记忆文件加载失败: ${e.message}${quarantined ? `（已隔离为 ${quarantined}）` : ''}`);
     }
   }
 
@@ -169,16 +173,23 @@ export class UserMemory {
   // 全量落盘（写失败只记日志——容错惯例）
   _save() {
     try {
-      fs.mkdirSync(path.dirname(this.file), { recursive: true });
       const groups = {};
       for (const [gid, users] of this.groups) {
         groups[gid] = {};
         for (const [uid, u] of users) groups[gid][uid] = u;
       }
-      fs.writeFileSync(this.file, JSON.stringify({ groups }, null, 2));
+      writeFileAtomic(this.file, JSON.stringify({ groups }, null, 2)); // 原子替换（2026-10）
+      this._lastSaveAt = Date.now();
     } catch (e) {
       log(`[usermem] 记忆写盘失败: ${e.message}`);
     }
+  }
+
+  // 节流写盘（2026-10）：recall 每次聊天都会刷新 lastUsed，原实现每次回复都整份重写记忆文件；
+  // 30s 内合并成一次（内存值即时更新，崩溃最多丢 30s 的召回时间戳）
+  _saveThrottled() {
+    if (Date.now() - (this._lastSaveAt || 0) < 30000) return;
+    this._save();
   }
 
   // 取群容器（create=false 时不存在返回 null）
@@ -309,7 +320,7 @@ export class UserMemory {
       f.strength = Math.min(1, (f.strength || 0.4) + 0.15); // 回忆 = 强化
       f.recalls = (f.recalls || 0) + 1;
     }
-    if (picked.length) this._save();
+    if (picked.length) this._saveThrottled();
     return picked.map((f) => ({ ...f }));
   }
 

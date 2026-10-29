@@ -8,6 +8,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { log } from '../platform/logger.js';
+import { writeFileAtomic, quarantineCorrupt } from '../platform/atomic.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // knowledge/（P5a 归类）比原 src/ 深两层：项目根 = __dirname/../../..（config 缺省时才用此默认）
@@ -37,7 +38,9 @@ export class LingoStore {
         this.entries = new Map(Object.entries(data));
       }
     } catch (e) {
-      log(`[lingo] 加载词典失败: ${e.message}`);
+      // 损坏文件隔离：不静默丢弃，改名留证（2026-10）
+      const quarantined = quarantineCorrupt(this.filePath);
+      log(`[lingo] 加载词典失败: ${e.message}${quarantined ? `（已隔离为 ${quarantined}）` : ''}`);
     }
   }
 
@@ -45,7 +48,7 @@ export class LingoStore {
   _save() {
     try {
       const obj = Object.fromEntries(this.entries);
-      fs.writeFileSync(this.filePath, JSON.stringify(obj, null, 2));
+      writeFileAtomic(this.filePath, JSON.stringify(obj, null, 2)); // 原子替换（2026-10）
     } catch (e) {
       log(`[lingo] 保存词典失败: ${e.message}`);
     }

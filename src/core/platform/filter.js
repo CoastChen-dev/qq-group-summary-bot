@@ -33,6 +33,18 @@ const SENSITIVE_KEYWORDS = [
   '自杀', '自残',
 ];
 
+// 模块私有：出站兜底只拦「角色不该自己说出口」的硬词（2026-10 修正误伤）。
+// 闲聊里讨论「密码 / 验证码 / 诈骗 / 自杀」是正常话题，整条替换会把正常回答也打成
+// 「这个话题我不太方便聊」；出站只保留隐私模式 + 这组硬词（入站仍用完整词表）。
+const HARD_SENSITIVE_KEYWORDS = [
+  '裸照', '裸聊', '色情', '黄片',
+  '约炮', '卖淫', '嫖娼', '援助交际', '包养',
+  '毒品', '冰毒', '海洛因', '大麻', '摇头丸',
+  '枪支', '弹药', '爆炸物', '自制炸弹',
+  '赌博', '博彩', '赌球', '六合彩',
+  '洗钱',
+];
+
 // 模块私有：脱敏时的替换占位符（仅替换隐私模式匹配段，不替换关键词本身）
 const PLACEHOLDER = '[内容已过滤]';
 
@@ -48,6 +60,24 @@ export function isSensitive(text) {
   }
   for (const re of PRIVACY_PATTERNS) {
     re.lastIndex = 0; // 带 g 标志的正则需重置，避免跨调用 lastIndex 残留
+    if (re.test(text)) return true;
+  }
+  return false;
+}
+
+/**
+ * 出站敏感判定（2026-10）：只命中隐私模式或 HARD_SENSITIVE_KEYWORDS（角色不该输出的硬词），
+ * 不再用入站完整词表——「密码/验证码/诈骗/自杀」等正常讨论词不再整条替换。
+ * @param {string} text - 待检测的模型回复
+ * @returns {boolean} 命中返回 true（调用方替换为安全文案）
+ */
+export function isSensitiveOutbound(text) {
+  if (!text) return false;
+  for (const kw of HARD_SENSITIVE_KEYWORDS) {
+    if (text.includes(kw)) return true;
+  }
+  for (const re of PRIVACY_PATTERNS) {
+    re.lastIndex = 0;
     if (re.test(text)) return true;
   }
   return false;

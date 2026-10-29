@@ -37,12 +37,14 @@ export function createStatsPlugin() {
       if ((m = t.match(/^(活跃榜|活跃统计|活跃度)\s*(\d*)$/))) {
         const days = Math.min(Math.max(parseInt(m[2] || '7', 10) || 7, 1), 90);
         if (ctx.analytics?.importState === 'running') return '历史消息导入中，请稍后再试'; // 坑 5：导入中查询读到不完整库
-        return ctx.analytics ? ctx.analytics.topActive(days) : '统计功能未启用';
+        // 按群统计（2026-10 修复：原实现跨群聚合，会把别群成员名展示到本群）
+        return ctx.analytics ? ctx.analytics.topActive(days, ctx.groupId) : '统计功能未启用';
       }
       // 整串「群统计/消息统计」：本群消息量统计，依赖 analytics
       if (t === '群统计' || t === '消息统计') {
         if (ctx.analytics?.importState === 'running') return '历史消息导入中，请稍后再试'; // 坑 5：同上
-        return ctx.analytics ? ctx.analytics.groupStats() : '统计功能未启用';
+        // 按群统计（2026-10 修复：原实现把全部群号发到任意群）
+        return ctx.analytics ? ctx.analytics.groupStats(ctx.groupId) : '统计功能未启用';
       }
 
       // 边界：本域全部未命中 → null（上层 registry 继续低优先级插件/chat 兜底）

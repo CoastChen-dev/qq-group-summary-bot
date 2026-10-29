@@ -62,18 +62,38 @@ export class MaaBridge {
     this.started = false;
     this._stderr = '';
     this._exited = false;
+    this._starting = null; // start() 并发去重（自动重启时避免重复 spawn）
   }
 
-  /** 启动 worker 并等就绪（反复调用幂等） */
+  /** 启动 worker 并等就绪（反复调用幂等；并发调用复用同一个启动 Promise） */
   async start() {
     if (this.started) return;
-    if (!this.baseUrl) {
-      if (!this.autoSpawn) throw new MaaBridgeError('maa bridge: 未配置 baseUrl 且 autoSpawn=false');
-      if (!this.maaPath) throw new MaaBridgeError('maa bridge: 未配置 maaPath');
-      await this._spawn();
-    }
-    await this._waitReady();
-    this.started = true;
+    if (this._starting) return this._starting;
+    this._starting = (async () => {
+      try {
+        this._exited = false;
+        this._stderr = '';
+        if (!this.baseUrl) {
+          if (!this.autoSpawn) throw new MaaBridgeError('maa bridge: 未配置 baseUrl 且 autoSpawn=false');
+          if (!this.maaPath) throw new MaaBridgeError('maa bridge: 未配置 maaPath');
+          await this._spawn();
+        }
+        await this._waitReady();
+        this.started = true;
+      } finally {
+        this._starting = null;
+      }
+    })();
+    return this._starting;
+  }
+
+  /**
+   * 确保桥可用：worker 运行中崩溃（子进程 exit）后，下一次指令会自动重新拉起。
+   * @returns {Promise<void>} 就绪即 resolve；重启失败按 start() 的异常抛出
+   */
+  async ensureReady() {
+    if (this.started && this.baseUrl) return;
+    await this.start();
   }
 
   /** 拉起 worker，解析 MAA_BRIDGE_PORT 行拿端口 */
@@ -100,12 +120,7 @@ export class MaaBridge {
       });
       this.child.stderr.on('data', (d) => { this._stderr = (this._stderr + String(d)).slice(-4000); });
       this.child.on('error', (e) => { this._exited = true; reject(new MaaBridgeError(`maa worker 启动失败: ${e.message}`)); });
-      this.child.on('exit', (code) => {
-        this._exited = true;
-        this.child = null;
-        if (!this.started) reject(new MaaBridgeError(`maa worker 退出 (${code}): ${this._stderr.slice(-400)}`));
-        else log(`[maa] worker 退出 (${code})`);
-      });
+      this.child.on('exit', (code) => this._onChildExit(code, reject));
       const tick = () => {
         if (this.baseUrl) return; // 已由 stdout 解析
         if (this._exited) return; // reject 已在 exit/error 里
@@ -117,6 +132,28 @@ export class MaaBridge {
       };
       tick();
     });
+  }
+
+  /**
+   * 子进程退出处理：初始启动阶段失败 → reject；运行中崩溃 → 复位 started/baseUrl，
+   * 下一次 ensureReady()/start() 自动重启（2026-10 修复「worker 挂了就永久失效」）。
+   * @param {number|null} code - 退出码
+   * @param {Function|null} reject - 初始启动 Promise 的 reject（已就绪后传 null）
+   * @returns {void}
+   */
+  _onChildExit(code, reject = null) {
+    this._exited = true;
+    this.child = null;
+    if (!this.started) {
+      if (typeof reject === 'function') {
+        reject(new MaaBridgeError(`maa worker 退出 (${code}): ${this._stderr.slice(-400)}`));
+      }
+      return;
+    }
+    this.started = false;
+    this.baseUrl = '';
+    this._starting = null;
+    log(`[maa] worker 退出 (${code})，下次指令将自动重启`);
   }
 
   /** 轮询 /status 直到 ok（worker 加载资源要几秒） */

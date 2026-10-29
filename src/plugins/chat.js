@@ -27,9 +27,10 @@ import { isArknightsRelated, extractKeywords } from '../core/knowledge/wiki.js';
 import { PRIORITY } from '../core/registry.js';
 import { fetchRetry } from '../core/platform/http.js';
 import { EMOJI_LIKES, CORE_EMOJI_LIKES, isEmojiLike } from '../core/platform/emoji.js';
-import { isSensitive } from '../core/platform/filter.js';
+import { isSensitive, isSensitiveOutbound } from '../core/platform/filter.js';
 import { sanitizeFact, looksLikeInstruction } from '../core/platform/usermem.js';
 import { splitMessage } from '../core/platform/text.js';
+import { writeFileAtomic } from '../core/platform/atomic.js';
 
 // 来源可信度权重（分数越高越可信）
 const SOURCE_TRUST = {
@@ -185,6 +186,9 @@ export class ChatBrain {
     // LLM 调用（0 = 不限）。超限静默丢弃，不回复、不耗 token——防止单人连刷把并发与费用吃满
     this.userCooldownMs = Math.max(0, Number(cfg.chatCooldownSeconds ?? 3)) * 1000;
     this.groupMinuteLimit = Math.max(0, Number(cfg.chatMinuteLimit ?? 20));
+    // 单次应答总时长上限（2026-10）：maxToolRounds 轮 × 每轮 60s×3 次尝试最坏可占 12 分钟，
+    // 并发 3 被占满时全群静默。超预算直接收口，由 _reply 回退兜底文案。
+    this.chatTotalTimeoutMs = Math.max(0, Number(cfg.chatTotalTimeoutMs ?? 180000));
     this._lastUserAt = new Map();
     this._groupWindow = new Map();
     // 深度思考（llm.thinking）：true 恒开 / false 恒关 / 'auto'（默认）= 仅重问题（数学/证明/代码等）开启；
@@ -234,8 +238,7 @@ export class ChatBrain {
   _saveHistory(groupId) {
     if (!this.historyDir) return;
     try {
-      fs.mkdirSync(this.historyDir, { recursive: true });
-      fs.writeFileSync(this._historyFile(groupId), JSON.stringify(this.getHistory(groupId)));
+      writeFileAtomic(this._historyFile(groupId), JSON.stringify(this.getHistory(groupId))); // 原子替换（2026-10）
     } catch (e) {
       log(`[chat] 群 ${groupId} 历史写盘失败: ${e.message}`);
     }
@@ -724,8 +727,14 @@ export class ChatBrain {
         }))
       : undefined;
     let msgs = messages;
+    const startedAt = Date.now();
 
     for (let round = 0; round <= this.maxToolRounds; round++) {
+      // 总时长预算：每轮开始前检查，剩余时间同时作为本轮 HTTP 超时上限
+      const remaining = this.chatTotalTimeoutMs > 0 ? this.chatTotalTimeoutMs - (Date.now() - startedAt) : Infinity;
+      if (remaining <= 0) {
+        throw new Error(`对话总耗时超过 ${Math.round(this.chatTotalTimeoutMs / 1000)}s 上限`);
+      }
       const withTools = useTools && round < this.maxToolRounds;
       const body = {
         model: this.model,
@@ -742,7 +751,7 @@ export class ChatBrain {
         if (this.reasoningEffort) body.reasoning_effort = this.reasoningEffort;
         body.max_tokens = Math.max(this.maxTokens, this.thinkingMaxTokens); // 思考预算更大（思维链计入输出）
       }
-      let msg = await this._postChat(body);
+      let msg = await this._postChat(body, Math.min(60000, remaining));
       let toolCalls = msg?.tool_calls;
       const hadToolCalls = withTools && Array.isArray(toolCalls) && toolCalls.length;
       // 思考模式预算耗尽（只出思维链、正文空且无工具调用）：退回非思考模式重试一次，保证有回答
@@ -751,7 +760,7 @@ export class ChatBrain {
         const fallbackBody = { ...body, max_tokens: this.maxTokens };
         delete fallbackBody.thinking;
         delete fallbackBody.reasoning_effort;
-        msg = await this._postChat(fallbackBody);
+        msg = await this._postChat(fallbackBody, Math.min(60000, remaining));
         toolCalls = msg?.tool_calls;
       }
 
@@ -777,7 +786,7 @@ export class ChatBrain {
    * @returns {Promise<Object|undefined>} message 对象（含 content/tool_calls/reasoning_content）
    * @throws HTTP 非 2xx（body 前 300 字）
    */
-  async _postChat(body) {
+  async _postChat(body, timeoutMs = 60000) {
     const resp = await fetchRetry(`${this.baseUrl}/chat/completions`, {
       method: 'POST',
       headers: {
@@ -785,7 +794,7 @@ export class ChatBrain {
         Authorization: `Bearer ${this.apiKey}`,
       },
       body: JSON.stringify(body),
-    }, { timeoutMs: 60000, retries: 2, retryDelayMs: 2000 });
+    }, { timeoutMs, retries: 2, retryDelayMs: 2000 });
     if (!resp.ok) {
       const text = await resp.text();
       throw new Error(`LLM API 错误 ${resp.status}: ${text.slice(0, 300)}`);
@@ -838,7 +847,8 @@ export class ChatBrain {
     const q = String(question || '').trim();
     if (q.length < 4) return;
     try {
-      const resp = await fetchRetry(`${this.baseUrl}/chat/completions`, {
+      // 提取也是一次 LLM 调用：走全局并发信号量（2026-10），避免高频群打出无上限并发
+      const resp = await this.semaphore.run(() => fetchRetry(`${this.baseUrl}/chat/completions`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -859,7 +869,7 @@ export class ChatBrain {
           temperature: 0.2,
           max_tokens: 200,
         }),
-      }, { timeoutMs: 30000, retries: 1, retryDelayMs: 1000 });
+      }, { timeoutMs: 30000, retries: 1, retryDelayMs: 1000 }));
       if (!resp.ok) return;
       const data = await resp.json();
       const content = data.choices?.[0]?.message?.content || '';
@@ -1102,10 +1112,11 @@ export function createChatTools({ arkdb, analytics, usermem, react, emojiCooldow
         type: 'object',
         properties: { days: { type: 'number', description: '统计最近天数（默认 7，1-90）' } },
       },
-      handler: async ({ days }) => {
+      handler: async ({ days }, ctx) => {
         if (analytics.importState === 'running') return '历史消息导入中，稍后再试';
         const d = Math.min(Math.max(Number(days) || 7, 1), 90);
-        return `${analytics.topActive(d)}\n${analytics.groupStats()}`;
+        // 按群统计（2026-10）：工具描述说的是「本群」，实现也必须只查本群
+        return `${analytics.topActive(d, ctx.groupId)}\n${analytics.groupStats(ctx.groupId)}`;
       },
     });
     tools.push({
@@ -1417,7 +1428,7 @@ export function createChatPlugin(deps) {
           busyGroups.delete(gid);
           // 模型自己判断「不接」：约定输出 <NO_REPLY>
           if (!reply || /^\s*<NO_REPLY>\s*$/i.test(reply)) return;
-          const safe = isSensitive(reply) ? '这个话题我不太方便聊，我们换个话题吧~' : reply;
+          const safe = isSensitiveOutbound(reply) ? '这个话题我不太方便聊，我们换个话题吧~' : reply;
           noteSpoken(gid);
           return deliver(ctx, safe).catch((e) => err(`[chat] 群 ${ctx.groupId} 接话发送失败:`, e.message));
         }).catch((e) => {
@@ -1434,7 +1445,7 @@ export function createChatPlugin(deps) {
         .then(async (reply) => {
           if (!reply) return;
           // 风控降险：出站内容敏感词兜底——命中隐私/违禁关键词时替换为安全文案，不发送原文
-          const safe = isSensitive(reply) ? '这个话题我不太方便聊，我们换个话题吧~' : reply;
+          const safe = isSensitiveOutbound(reply) ? '这个话题我不太方便聊，我们换个话题吧~' : reply;
           // 像真人打字：拆 1-3 条短消息 + 停顿；第一条按规则真 @（免 @ 群/关闭 replyAtUser 时纯文本）
           await deliver(ctx, safe, { at: !!(ctx.userId && !ctx.noAt) });
         })

@@ -373,3 +373,58 @@ describe('report 插件（每日日报，仅 hooks）', () => {
     assert.deepEqual(seenLabels, ['2026-10-31']); // 旧实现会算出 2026-11-00
   });
 });
+
+describe('summary 概括窗口上限（2026-10）', () => {
+  it('上次总结早于 maxWindowHours：只回读最近窗口，避免同步读回几万行', async () => {
+    const loaded = [];
+    const nowSec = Math.floor(Date.now() / 1000);
+    const plugin = createSummaryPlugin({
+      store: {
+        getLastSummaryAt: () => nowSec - 10 * 86400,
+        loadFromDisk: (gid, since) => loaded.push(since),
+        collectSince: () => [], // 窗口内无消息：只看 loadFromDisk 的起点
+        setLastSummaryAt: () => {},
+      },
+      client: { sendGroupMsg: async () => {} },
+      summarizer: { summarize: async () => 'x' },
+      filterMessages: passThrough,
+      minMessages: 1,
+      manualCmds: ['总结'],
+      maxWindowHours: 72,
+      isReady: () => true,
+    });
+    const reg = new PluginRegistry();
+    reg.register(plugin);
+    assert.equal(reg.dispatch({ groupId: 3, text: '总结' }), true);
+    await tick();
+    assert.equal(loaded.length, 1);
+    assert.ok(loaded[0] >= nowSec - 72 * 3600 - 2, `窗口起点应被压到 72h 内，实际 ${loaded[0]}`);
+    assert.ok(loaded[0] <= nowSec - 72 * 3600 + 2);
+  });
+
+  it('窗口在 maxWindowHours 内：保持原有「从上次总结起」语义', async () => {
+    const loaded = [];
+    const nowSec = Math.floor(Date.now() / 1000);
+    const since = nowSec - 3 * 3600;
+    const plugin = createSummaryPlugin({
+      store: {
+        getLastSummaryAt: () => since,
+        loadFromDisk: (gid, s) => loaded.push(s),
+        collectSince: () => [],
+        setLastSummaryAt: () => {},
+      },
+      client: { sendGroupMsg: async () => {} },
+      summarizer: { summarize: async () => 'x' },
+      filterMessages: passThrough,
+      minMessages: 1,
+      manualCmds: ['总结'],
+      maxWindowHours: 72,
+      isReady: () => true,
+    });
+    const reg = new PluginRegistry();
+    reg.register(plugin);
+    reg.dispatch({ groupId: 4, text: '总结' });
+    await tick();
+    assert.deepEqual(loaded, [since]);
+  });
+});

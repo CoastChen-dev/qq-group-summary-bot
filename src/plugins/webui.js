@@ -73,6 +73,31 @@ export class WebUI {
     return host === '127.0.0.1' || host === 'localhost' || host === '::1' || String(host).startsWith('127.');
   }
 
+  // Host 头是否回环（未配 token 时只接受本机 Host，防 DNS rebinding，2026-10）
+  _loopbackHostHeader(host) {
+    const raw = String(host || '');
+    const m = /^\[([^\]]+)\](?::\d+)?$/.exec(raw) || /^([^:]+)(?::\d+)?$/.exec(raw);
+    const h = (m ? m[1] : raw).toLowerCase();
+    return h === 'localhost' || h === '127.0.0.1' || h === '::1' || h.startsWith('127.');
+  }
+
+  // 同源校验（CSRF 防护，2026-10）：浏览器跨站请求会带 Origin，非本面板来源拒绝；
+  // 非浏览器客户端（curl/脚本）不带 Origin → 放行（本机进程本来就有访问权）
+  _sameOrigin(req) {
+    const origin = req.headers['origin'];
+    if (!origin) return true;
+    try {
+      return new URL(origin).host === String(req.headers['host'] || '');
+    } catch {
+      return false;
+    }
+  }
+
+  // POST 只接受 application/json（跨站表单/纯文本请求无法伪造该 Content-Type，2026-10）
+  _isJsonRequest(req) {
+    return String(req.headers['content-type'] || '').toLowerCase().startsWith('application/json');
+  }
+
   /**
    * 停服：关闭 HTTP server（未 listen/已停时无操作；关闭是异步的，不再接受新连接）。
    * @returns {void}
@@ -125,6 +150,12 @@ export class WebUI {
     res.end(JSON.stringify(obj));
   }
 
+  // 非 200 JSON 响应（403/415 等安全拒绝用）
+  _jsonStatus(res, code, obj) {
+    res.writeHead(code, { 'Content-Type': 'application/json; charset=utf-8' });
+    res.end(JSON.stringify(obj));
+  }
+
   /** /api/config 出口脱敏：深拷贝后抹掉 llm.apiKey（留首 6 尾 4 加省略号）与 napcat.accessToken（全掩为 ***） */
   _maskedConfig() {
     const cfg = this.ctx.getConfig();
@@ -143,6 +174,20 @@ export class WebUI {
     const url = new URL(req.url, 'http://localhost');
     const p = url.pathname;
     const m = req.method || 'GET';
+
+    // CSRF / DNS rebinding 防护（2026-10）：未配 token 时只接受本机 Host；
+    // 写操作要求同源 + application/json——任何网页都无法再用跨站表单/纯文本打管理接口
+    if (!this.token && !this._loopbackHostHeader(req.headers['host'])) {
+      return this._jsonStatus(res, 403, { error: 'forbidden host' });
+    }
+    if (m !== 'GET' && m !== 'HEAD') {
+      if (!this._sameOrigin(req)) {
+        return this._jsonStatus(res, 403, { error: 'cross-origin request rejected' });
+      }
+      if (m === 'POST' && !this._isJsonRequest(req)) {
+        return this._jsonStatus(res, 415, { error: 'Content-Type must be application/json' });
+      }
+    }
 
     // 页面路由：返回内联 HTML
     if (p === '/' || p === '/index.html') {
@@ -308,10 +353,11 @@ async function loadLingo() {
   const d = await api('/api/lingo');
   $('lingoCount').textContent = '（共 ' + d.entries.length + ' 条）';
   $('lingoTbody').innerHTML = d.entries.map((e) =>
-    '<tr><td class="term">' + esc(e.term) + '</td><td>' + esc(e.meaning) + '</td><td><button class="danger" onclick="delLingo(\\'' + esc(e.term).replace(/'/g, "\\\\'") + '\\')">删除</button></td></tr>'
+    '<tr><td class="term">' + esc(e.term) + '</td><td>' + esc(e.meaning) + '</td><td><button class="danger" data-term="' + escAttr(e.term) + '">删除</button></td></tr>'
   ).join('');
 }
 function esc(s) { return String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
+function escAttr(s) { return esc(s).replace(/"/g, '&quot;').replace(/'/g, '&#39;'); }
 async function addLingo() {
   const term = $('newTerm').value.trim(), meaning = $('newMeaning').value.trim();
   if (!term || !meaning) return toast('请填写词条和释义');
@@ -331,8 +377,8 @@ async function loadMemory() {
   $('memCount').textContent = '（' + d.users.length + ' 人 / ' + total + ' 条）';
   $('memTbody').innerHTML = d.users.map((u) =>
     '<tr><td>' + esc(u.groupId) + '</td><td>' + esc(u.name || u.userId) + '</td><td>' +
-    u.facts.map((f, i) => esc(f.text) + ' <a href="#" onclick="delFact(\\'' + esc(u.groupId) + '\\',\\'' + esc(u.userId) + '\\',' + i + ');return false;" class="muted">×</a>').join('<br>') +
-    '</td><td><button class="danger" onclick="delMemUser(\\'' + esc(u.groupId) + '\\',\\'' + esc(u.userId) + '\\')">清空</button></td></tr>'
+    u.facts.map((f, i) => esc(f.text) + ' <a href="#" class="muted" data-gid="' + escAttr(u.groupId) + '" data-uid="' + escAttr(u.userId) + '" data-index="' + i + '">×</a>').join('<br>') +
+    '</td><td><button class="danger" data-gid="' + escAttr(u.groupId) + '" data-uid="' + escAttr(u.userId) + '">清空</button></td></tr>'
   ).join('');
 }
 async function delFact(gid, uid, index) {
@@ -345,10 +391,28 @@ async function delMemUser(gid, uid) {
   toast('已清空该用户记忆');
   loadMemory();
 }
+// 事件委托（2026-10 安全修复）：不再把词条/群号拼进 onclick 字符串——
+// 反斜杠可穿透 '\\'' 转义造成存储型 XSS（群员可写词条 → 管理员打开面板即执行）
+function bindDelegates() {
+  $('lingoTbody').addEventListener('click', (ev) => {
+    const btn = ev.target.closest('button[data-term]');
+    if (btn) delLingo(btn.dataset.term);
+  });
+  $('memTbody').addEventListener('click', (ev) => {
+    const del = ev.target.closest('a[data-index]');
+    if (del) {
+      ev.preventDefault();
+      delFact(del.dataset.gid, del.dataset.uid, Number(del.dataset.index));
+      return;
+    }
+    const btn = ev.target.closest('button[data-gid]');
+    if (btn) delMemUser(btn.dataset.gid, btn.dataset.uid);
+  });
+}
 async function doRefresh() {
   $('refreshNote').textContent = '更新中…';
   try {
-    const r = await api('/api/refresh', { method: 'POST' });
+    const r = await api('/api/refresh', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
     toast('刷新完成');
     $('refreshNote').textContent = r.result;
     loadStatus();
@@ -360,6 +424,7 @@ async function loadConfig() {
   const c = await api('/api/config');
   $('configView').textContent = JSON.stringify(c, null, 2);
 }
+bindDelegates();
 loadStatus(); loadLingo(); loadMemory(); loadConfig();
 setInterval(loadStatus, 10000);
 </script>

@@ -32,10 +32,14 @@ import { PRIORITY } from '../core/registry.js';
  * @param {number} deps.minMessages - 概括消息数门槛（config.minMessages ?? 1）
  * @param {string[]} deps.manualCmds - 触发关键词表（config.commands.manualSummary，缺省 ['总结','/总结','#总结']）
  * @param {Function} deps.isReady - () => boolean，WS 就绪锚点（runtime ready 标志的读引用）
+ * @param {number} [deps.maxWindowHours=72] - 概括窗口上限小时数（2026-10：上次总结可能在很久
+ *   以前，无上限的 loadFromDisk 会同步回读数万行，而 prompt 只用最近 llm.maxMessages 条）
  * @returns {Object} 注册表可直接 register 的插件描述符
  */
 export function createSummaryPlugin(deps) {
-  const { store, summarizer, client, filterMessages, minMessages, manualCmds, isReady } = deps;
+  const {
+    store, summarizer, client, filterMessages, minMessages, manualCmds, isReady, maxWindowHours = 72,
+  } = deps;
   // per-group 概括互斥：同群已有概括在跑时忽略重复指令（随插件实例，勿提升为全局，见 refactor-proposal risk #2）
   const summaryInFlight = new Set();
 
@@ -53,11 +57,19 @@ export function createSummaryPlugin(deps) {
     const nowSec = Math.floor(Date.now() / 1000);
     let since = store.getLastSummaryAt(groupId);
     if (!since) since = nowSec - 60 * 60;
+    // 窗口上限（2026-10）：上次总结可能在很久以前（实测有 18 天），无上限的 loadFromDisk 会
+    // 同步回读几万行；prompt 又只取最近 llm.maxMessages 条，更早的消息进不了模型。超过上限
+    // 时只概括最近 maxWindowHours 小时，并在日志里说明被跳过的时段。
+    const capped = since < nowSec - Math.max(1, Number(maxWindowHours) || 72) * 3600;
+    const windowStart = capped ? nowSec - Math.max(1, Number(maxWindowHours) || 72) * 3600 : since;
+    if (capped) {
+      log(`[group ${groupId}] 概括窗口起点 ${fmtFull(new Date(since * 1000))} 早于 ${maxWindowHours}h 上限，仅概括 ${fmtFull(new Date(windowStart * 1000))} 之后的消息`);
+    }
 
     // 先补齐窗口：内存只保留最近 retentionHours（默认 72h），概括窗口跨重启或长于保留窗口时
     // 只查内存会漏消息；loadFromDisk 按 id 幂等，重复读同一段不会再落盘
-    store.loadFromDisk?.(groupId, since);
-    const recs = store.collectSince(groupId, since);
+    store.loadFromDisk?.(groupId, windowStart);
+    const recs = store.collectSince(groupId, windowStart);
     if (recs.length === 0) {
       log(`[group ${groupId}] 该时段无消息，跳过概括`);
       return;
@@ -76,7 +88,7 @@ export function createSummaryPlugin(deps) {
       log(`[group ${groupId}] 已过滤 ${filtered.length} 条敏感/隐私消息`);
     }
 
-    const span = `从 ${fmtFull(new Date(since * 1000))} 到 ${fmtFull(new Date(recs[recs.length - 1].time * 1000))}`;
+    const span = `从 ${fmtFull(new Date(windowStart * 1000))} 到 ${fmtFull(new Date(recs[recs.length - 1].time * 1000))}`;
     log(`[group ${groupId}] 开始概括 ${kept.length} 条消息 (${span})`);
 
     const summary = await summarizer.summarize(groupId, kept, span, 'manual');

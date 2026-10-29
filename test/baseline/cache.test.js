@@ -90,3 +90,18 @@ describe('知识缓存基础契约（get/set/hit/size）', () => {
     assert.ok(c.get('q:y'));
   });
 });
+
+describe('缓存条目上限（2026-10）', () => {
+  it('超过 maxEntries：按 cachedAt 淘汰最旧条目并落盘', () => {
+    const file = path.join(makeTmp(), 'cache.json');
+    const c = new KnowledgeCache(file, { maxEntries: 2 });
+    c.set('q:a', { context: 'a' });
+    c.set('q:b', { context: 'b' });
+    c.set('q:c', { context: 'c' });
+    assert.equal(c.size(), 2);
+    assert.equal(c.get('q:a'), null); // 最旧被淘汰
+    assert.ok(c.get('q:b') && c.get('q:c'));
+    const c2 = new KnowledgeCache(file, { maxEntries: 2 });
+    assert.equal(c2.size(), 2); // 淘汰结果已落盘
+  });
+});

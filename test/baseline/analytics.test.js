@@ -177,6 +177,21 @@ describe('活跃榜与群统计', () => {
     const { analytics } = makeAnalytics(t);
     assert.equal(analytics.groupStats(), '暂无消息统计');
   });
+
+  it('按群过滤（2026-10 修复）：传 groupId 时只统计该群，不泄露别群数据', (t) => {
+    const { analytics } = makeAnalytics(t);
+    for (let i = 0; i < 3; i++) recNow(analytics, '10001', { name: '张三' });
+    recNow(analytics, '20002', { name: '李四' });
+
+    const top = analytics.topActive(7, '10001');
+    assert.ok(top.includes('张三（3 条）'));
+    assert.ok(!top.includes('李四'));
+
+    const stats = analytics.groupStats('10001');
+    assert.ok(stats.includes('群 10001：3 条'));
+    assert.ok(!stats.includes('20002'));
+    assert.equal(analytics.groupStats('99999'), '暂无消息统计');
+  });
 });
 
 describe('抽卡记录（pulls 表）', () => {
@@ -281,5 +296,60 @@ describe('容错（锁定已知行为）', () => {
     const { analytics } = makeAnalytics(t);
     analytics.record('10001', { id: '1', time: 1, userId: 'u1', name: 'n', text: 't' });
     analytics.recordPull('10001', 'u1', 'n', 'p', FOUR, 'o', false); // 不抛即过
+  });
+});
+
+describe('导入断点与数据保留（2026-10）', () => {
+  it('二次启动跳过未变化文件；文件变化后重导（UNIQUE 去重幂等）', async () => {
+    const dir = makeTmp();
+    const gid = '10001';
+    const date = localDate(Date.now());
+    const file = path.join(dir, 'messages', gid, `${date}.jsonl`);
+    seedMessages(dir, gid, date, [{ id: 'a', time: 1, userId: 'u1', name: '甲', text: '一' }]);
+
+    const a1 = new Analytics(path.join(dir, 'messages.db'), path.join(dir, 'messages'));
+    await a1.importHistory();
+    assert.deepEqual(a1.importStats, { files: 1, skipped: 0 });
+    a1.close();
+
+    const a2 = new Analytics(path.join(dir, 'messages.db'), path.join(dir, 'messages'));
+    trackDbClose(a2);
+    await a2.importHistory();
+    assert.deepEqual(a2.importStats, { files: 0, skipped: 1 }); // 未变化 → 跳过
+    assert.equal(a2.countMessages(), 1);
+
+    fs.appendFileSync(file, JSON.stringify({ id: 'b', time: 2, userId: 'u2', name: '乙', text: '二' }) + '\n');
+    const a3 = new Analytics(path.join(dir, 'messages.db'), path.join(dir, 'messages'));
+    trackDbClose(a3);
+    await a3.importHistory();
+    assert.deepEqual(a3.importStats, { files: 1, skipped: 0 }); // size 变化 → 重导
+    assert.equal(a3.countMessages(), 2);
+  });
+
+  it('新库/删库：忽略断点全量重导（避免「库没了、断点还在」）', async () => {
+    const dir = makeTmp();
+    const gid = '10001';
+    const date = localDate(Date.now());
+    seedMessages(dir, gid, date, [{ id: 'a', time: 1, userId: 'u1', name: '甲', text: '一' }]);
+    const dbPath = path.join(dir, 'messages.db');
+
+    const a1 = new Analytics(dbPath, path.join(dir, 'messages'));
+    await a1.importHistory();
+    a1.close();
+    for (const f of [dbPath, `${dbPath}-wal`, `${dbPath}-shm`]) fs.rmSync(f, { force: true });
+
+    const a2 = new Analytics(dbPath, path.join(dir, 'messages'));
+    trackDbClose(a2);
+    await a2.importHistory();
+    assert.deepEqual(a2.importStats, { files: 1, skipped: 0 });
+    assert.equal(a2.countMessages(), 1);
+  });
+
+  it('pruneBefore：删除早于 cut 的行', (t) => {
+    const { analytics } = makeAnalytics(t);
+    analytics.record('g', { id: 'old', time: 1000, userId: 'u', name: 'n', text: 'x' });
+    analytics.record('g', { id: 'new', time: 2000, userId: 'u', name: 'n', text: 'y' });
+    assert.equal(analytics.pruneBefore(1500), 1);
+    assert.equal(analytics.countMessages(), 1);
   });
 });

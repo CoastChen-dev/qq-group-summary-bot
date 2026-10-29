@@ -16,6 +16,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { log } from './logger.js';
+import { writeFileAtomic, quarantineCorrupt } from './atomic.js';
 
 /**
  * 单个 OneBot 消息段（{type, data}）→ 展示用纯文本。
@@ -136,6 +137,10 @@ export class MessageStore {
     this._legacyV1 = 0;
     // 在线心跳节流用：上次写 runtime.json lastConnectedAt 的秒级时间（touchConnected）
     this._lastConnectedWrite = 0;
+    // lastSeen 落盘节流（2026-10）：addMessage 热路径不再每条消息全量重写状态文件；
+    // 内存水位即时更新，落盘最多每 10s 一次，stop() 时 flushLastSeen() 兜底。
+    this._lastSeenWriteAt = 0;
+    this._lastSeenDirty = false;
     this._loadLastSeen();
   }
 
@@ -172,7 +177,7 @@ export class MessageStore {
   setLastConnectedAt(ts) {
     try {
       fs.mkdirSync(this.stateDir, { recursive: true });
-      fs.writeFileSync(this._runtimeFile(), JSON.stringify({ lastConnectedAt: ts }));
+      writeFileAtomic(this._runtimeFile(), JSON.stringify({ lastConnectedAt: ts })); // 原子替换（2026-10）
     } catch {
       /* 忽略 */
     }
@@ -224,8 +229,10 @@ export class MessageStore {
         this._legacyV1 = data.lastSeenTs;
         for (const name of this._seedGroupDirs()) this.lastSeenByGroup.set(name, data.lastSeenTs);
       }
-    } catch {
-      /* 损坏一律按空 */
+    } catch (e) {
+      // 损坏文件隔离：改名留证（否则下次 setLastSeenTs 会把旧水位覆盖成空）
+      const quarantined = quarantineCorrupt(this._lastSeenFile());
+      log(`[store] lastSeen 状态读取失败按空: ${e.message}${quarantined ? `（已隔离为 ${quarantined}）` : ''}`);
     }
   }
 
@@ -246,19 +253,47 @@ export class MessageStore {
    * 按群调用（见 data-format.md §2「addMessage 与 backfill 写入」）。
    * @param {string|number} groupId - 群号（String 归一存储）
    * @param {number} ts - 秒级时间戳（通常取刚落盘消息的 time）
+   * @param {Object} [opts]
+   * @param {boolean} [opts.persist=true] - true 立即落盘（backfill/显式调用）；
+   *   false 走 10s 节流（addMessage 热路径，2026-10），由 flushLastSeen()/下一次窗口补写
    * @returns {void}
    * 副作用: 覆盖写 data/state/lastSeen.json（v2 {"byGroup"} 形状，含全部已记录群）；
    *   写失败静默忽略，内存值已先行推进
    */
-  setLastSeenTs(groupId, ts) {
+  setLastSeenTs(groupId, ts, { persist = true } = {}) {
     const key = String(groupId);
     const cur = this.lastSeenByGroup.get(key) ?? this._legacyV1 ?? 0;
     this.lastSeenByGroup.set(key, Math.max(cur, ts));
+    if (persist) this._saveLastSeen();
+    else this._saveLastSeenThrottled();
+  }
+
+  // 落盘 lastSeen（原子替换；写失败静默，内存值已先行推进）
+  _saveLastSeen() {
     try {
-      fs.writeFileSync(this._lastSeenFile(), JSON.stringify({ byGroup: Object.fromEntries(this.lastSeenByGroup) }));
+      writeFileAtomic(this._lastSeenFile(), JSON.stringify({ byGroup: Object.fromEntries(this.lastSeenByGroup) }));
+      this._lastSeenWriteAt = Date.now();
+      this._lastSeenDirty = false;
     } catch {
       /* 忽略 */
     }
+  }
+
+  // 热路径节流落盘（2026-10）：10s 内只记 dirty，下一次窗口或 stop() flush 时写
+  _saveLastSeenThrottled() {
+    if (Date.now() - this._lastSeenWriteAt < 10000) {
+      this._lastSeenDirty = true;
+      return;
+    }
+    this._saveLastSeen();
+  }
+
+  /**
+   * 强制落盘未写入的 lastSeen 水位（停服/退出路径调用；无未写入内容时无操作）。
+   * @returns {void}
+   */
+  flushLastSeen() {
+    if (this._lastSeenDirty) this._saveLastSeen();
   }
 
   // 取群内存态（惰性建默认结构）——各公开方法的统一入口
@@ -358,7 +393,7 @@ export class MessageStore {
         }
         // 存在重复或坏行：整文件重写为规范形态（每行唯一且可解析），保文件可重读
         if (uniqueLines.length !== lines.length) {
-          fs.writeFileSync(file, uniqueLines.join('\n') + (uniqueLines.length ? '\n' : ''));
+          writeFileAtomic(file, uniqueLines.join('\n') + (uniqueLines.length ? '\n' : '')); // 原子重写（2026-10）
           log(`[store] 群 ${groupId} 文件 ${ds}.jsonl 已去重 (${lines.length} -> ${uniqueLines.length} 行)`);
         }
       }
@@ -460,7 +495,8 @@ export class MessageStore {
     if ((rec.time ?? 0) > g.newestTime) g.newestTime = rec.time;
     this.writtenIds.add(`${groupId}:${rec.id}`);
     this._learnUser(g, rec);
-    if (touchLastSeen) this.setLastSeenTs(groupId, rec.time);
+    // 实时消息是热路径：水位只推进内存 + 节流落盘（2026-10；backfill/stop 走即时落盘）
+    if (touchLastSeen) this.setLastSeenTs(groupId, rec.time, { persist: false });
     const file = this._fileFor(groupId, localDate(rec.time * 1000));
     fs.mkdirSync(path.dirname(file), { recursive: true });
     fs.appendFileSync(file, JSON.stringify(rec) + '\n');
@@ -522,7 +558,7 @@ export class MessageStore {
   setLastSummaryAt(groupId, ts) {
     const g = this._group(groupId);
     g.lastSummaryAt = ts;
-    fs.writeFileSync(this._stateFile(groupId), JSON.stringify({ lastSummaryAt: ts }));
+    writeFileAtomic(this._stateFile(groupId), JSON.stringify({ lastSummaryAt: ts })); // 原子替换（2026-10）
   }
 
   /**
@@ -532,5 +568,43 @@ export class MessageStore {
    */
   trackedGroupIds() {
     return [...this.groupIds];
+  }
+
+  /**
+   * 磁盘上出现过消息文件的群号（data/messages/<群号>/ 目录名）。
+   * config.groups 为空（= 跟踪全部群）时，runtime 启动预载「今天」窗口用它枚举——
+   * writtenIds 由此重建，避免 backfill 把已落盘消息再 append 一遍（2026-10）。
+   * @returns {string[]} 群号数组；目录读取失败返回 []
+   */
+  diskGroupIds() {
+    return this._seedGroupDirs();
+  }
+
+  /**
+   * 删除早于 ts 的磁盘 JSONL（数据保留策略用；`<群号>/<YYYY-MM-DD>.jsonl` 按文件名日期比较）。
+   * 调用方应先于 analytics.importHistory() 执行，避免删掉的日期又被导入回 SQLite。
+   * @param {number} ts - 秒级时间戳（删除文件名日期 < 该日期的分片）
+   * @returns {number} 删除的文件数（读取/删除失败记日志继续）
+   */
+  pruneDiskBefore(ts) {
+    const cutoffDate = localDate(ts * 1000);
+    let removed = 0;
+    try {
+      for (const gid of this._seedGroupDirs()) {
+        const gdir = path.join(this.msgsDir, gid);
+        for (const f of fs.readdirSync(gdir)) {
+          if (!f.endsWith('.jsonl')) continue;
+          if (f.slice(0, -6) < cutoffDate) {
+            try {
+              fs.rmSync(path.join(gdir, f), { force: true });
+              removed++;
+            } catch { /* 单个文件失败继续 */ }
+          }
+        }
+      }
+    } catch (e) {
+      log(`[store] 清理旧消息文件失败: ${e.message}`);
+    }
+    return removed;
   }
 }

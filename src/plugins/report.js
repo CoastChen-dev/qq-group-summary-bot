@@ -21,6 +21,7 @@
  * 读写数据：读消息存储（loadFromDisk/collectRange）；经 summarizer 调 LLM 概括；私聊经 client。
  */
 import { log, err } from '../core/platform/logger.js';
+import { splitMessage } from '../core/platform/text.js';
 
 /**
  * 每日日报插件描述符构造：{name:'report', priority: 0, handleMessage, hooks:{start,stop}}。
@@ -154,7 +155,10 @@ export function createReportPlugin(deps) {
     } catch (e) {
       err('[report] 合并转发失败，回退整条私聊:', e.message);
       const msg = `${header}\n\n${parts.map((p) => `【${p.name}】${p.text}`).join('\n\n---\n\n')}`;
-      await client.sendPrivateMsg(reportUserId, msg);
+      // 私聊同样有单条字节上限：兜底文本按 3500B 切条依次发送（2026-10）
+      for (const part of splitMessage(msg)) {
+        await client.sendPrivateMsg(reportUserId, part);
+      }
     }
   }
 

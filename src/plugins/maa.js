@@ -90,6 +90,10 @@ export function createMaaPlugin({
   let watching = null; // 当前轮询 promise（仅用于防重复提示，不阻塞分发）
   const pendingGacha = new Map(); // groupId → { chain, label, cost, expiresAt }
 
+  // bridge 可能因 worker 崩溃失效：指令前先确保可用（2026-10）。只做「确保就绪」，
+  // 不重试已经发出的提交——避免网络抖动时重复提交任务。
+  const ensureBridge = () => (typeof bridge.ensureReady === 'function' ? bridge.ensureReady() : Promise.resolve());
+
   const send = (ctx, text, at = false) => {
     if (!client) return;
     const p = at && ctx.userId && !ctx.noAt
@@ -150,7 +154,7 @@ export function createMaaPlugin({
 
   /** 提交任务链：回执 + 后台轮询（单任务走这里也一致）；opts.timeoutMinutes 会同时放宽 worker 与轮询上限 */
   function submitMany(ctx, tasks, label, opts = {}) {
-    bridge.submitMany(tasks, opts.timeoutMinutes).then((r) => {
+    ensureBridge().then(() => bridge.submitMany(tasks, opts.timeoutMinutes)).then((r) => {
       send(ctx, `【MAA】${label} 已开始，完成后回报`, true);
       const watchMs = opts.timeoutMinutes ? (opts.timeoutMinutes + 5) * 60000 : taskTimeoutMs;
       watching = watchJob(r.job_id, ctx, label, watchMs);
@@ -181,7 +185,7 @@ export function createMaaPlugin({
 
     if (/^(帮助|help|指令)$/i.test(head)) return HELP;
     if (/^(状态|status)$/i.test(head)) {
-      bridge.status().then((s) => {
+      ensureBridge().then(() => bridge.status()).then((s) => {
         const job = s.job && s.job.state === 'running'
           ? `${(s.job.tasks || []).map((t) => t.type).join(' → ') || s.job.type} 进行中（${fmtElapsed((s.job.elapsed || 0) * 1000)}）`
           : '空闲';
@@ -196,7 +200,7 @@ export function createMaaPlugin({
       return true;
     }
     if (/^(截图|截屏|screenshot|screen)$/i.test(head)) {
-      bridge.screenshot().then((png) => {
+      ensureBridge().then(() => bridge.screenshot()).then((png) => {
         if (!client || typeof client.sendGroupImage !== 'function') {
           send(ctx, '【MAA】当前客户端不支持发图', true);
           return;
@@ -209,7 +213,7 @@ export function createMaaPlugin({
       return true;
     }
     if (/^(停止|stop)$/i.test(head)) {
-      bridge.stop().then(() => {
+      ensureBridge().then(() => bridge.stop()).then(() => {
         send(ctx, '【MAA】已发送停止指令', true);
         watching = null;
       }).catch((e) => send(ctx, `【MAA】停止失败：${e.message}`, true));
@@ -329,7 +333,7 @@ export function createMaaPlugin({
       return submit(ctx, 'Custom', { task_names: names }, `自定义 ${names.join('+')}`);
     }
     if (/^(重连|connect)$/i.test(head)) {
-      bridge.connect().then((r) => {
+      ensureBridge().then(() => bridge.connect()).then((r) => {
         send(ctx, r.connected ? '【MAA】已重新连接设备' : `【MAA】重连失败：${r.error || '未知原因'}`, true);
       }).catch((e) => send(ctx, `【MAA】重连失败：${e.message}`, true));
       return true;

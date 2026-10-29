@@ -19,6 +19,7 @@ import { DatabaseSync } from 'node:sqlite';
 import fs from 'node:fs';
 import path from 'node:path';
 import { log } from './logger.js';
+import { writeFileAtomic } from './atomic.js';
 
 // messages 表镜像 INSERT（importHistory 的批次导入 _importFile 与 record 实时镜像共用同一语句）
 const INSERT_MSG_SQL = 'INSERT OR IGNORE INTO messages (group_id, msg_id, time, user_id, name, text) VALUES (?,?,?,?,?,?)';
@@ -80,6 +81,12 @@ export class Analytics {
     // 共享导入 promise：'running' 与 'done' 后重复调用返回同一实例——进程内只跑一轮，
     // 重启才重新评估（INSERT OR IGNORE 幂等，重跑不产生重复行）
     this._importPromise = null;
+    // 导入断点（2026-10）：记录每个 JSONL 文件的 size/mtimeMs，重启时跳过未变化的文件
+    // （实测 18.7 万行全量重扫约 4s）。断点放在 DB 同目录；countMessages()===0（新库/删库）
+    // 时忽略断点强制全量重导，避免「库没了、断点还在」把文件全跳过。
+    this.importStateFile = path.join(path.dirname(dbPath), '.import-state.json');
+    // 最近一次导入的读数（WebUI/日志/测试可观察）：扫描了几个文件、跳过了几个
+    this.importStats = { files: 0, skipped: 0 };
   }
 
   /**
@@ -96,6 +103,8 @@ export class Analytics {
    *
    * 状态机：'idle'（未启动）→ 'running' → 'done'（finally 恒置位，含整体异常路径）；
    * countMessages() 不触发导入（文档语义：仅计数），导入中返回部分行数。
+   * 导入断点（2026-10）：`data/.import-state.json` 记录每个文件的 size/mtimeMs，重启跳过
+   * 未变化文件（`importStats` 给出扫描/跳过数）；新库（countMessages()===0）忽略断点全量重导。
    * @returns {Promise<void>} 完成即 resolve（内部已吞全部失败仅记日志）
    */
   importHistory() {
@@ -103,6 +112,11 @@ export class Analytics {
     this.importState = 'running';
     this._importPromise = (async () => {
       let total = 0;
+      const stats = { files: 0, skipped: 0 };
+      const prevState = this._loadImportState();
+      const nextState = {};
+      // 断点只在 DB 已有数据时可信：新库/删库必须全量重导（否则断点会把所有文件跳过去）
+      const freshDb = this.countMessages() === 0;
       try {
         const dirs = fs.existsSync(this.messagesDir) ? fs.readdirSync(this.messagesDir) : [];
         for (const gid of dirs) {
@@ -110,23 +124,75 @@ export class Analytics {
           if (!fs.statSync(gdir).isDirectory()) continue;
           for (const f of fs.readdirSync(gdir)) {
             if (!f.endsWith('.jsonl')) continue;
+            const full = path.join(gdir, f);
+            const key = `${gid}/${f}`;
             try {
-              const lines = fs.readFileSync(path.join(gdir, f), 'utf8').split('\n').filter(Boolean);
+              const st = fs.statSync(full);
+              const prev = prevState[key];
+              if (!freshDb && prev && prev.size === st.size && prev.mtimeMs === st.mtimeMs) {
+                nextState[key] = prev;
+                stats.skipped++;
+                continue; // 未变化：跳过整文件（2026-10 导入断点）
+              }
+              const lines = fs.readFileSync(full, 'utf8').split('\n').filter(Boolean);
               total += await this._importFile(String(gid), lines);
+              nextState[key] = { size: st.size, mtimeMs: st.mtimeMs };
+              stats.files++;
             } catch (e) {
               // 单文件级容错：坏文件/读取竞态不中断其余文件（原实现整库中途失败即永远跳过）
               log(`[analytics] 文件 ${f} 导入失败已跳过: ${e.message}`);
             }
           }
         }
-        if (total > 0) log(`[analytics] 已从 JSONL 导入 ${total} 条消息到 SQLite`);
+        this.importStats = stats;
+        if (total > 0) {
+          log(`[analytics] 已从 JSONL 导入 ${total} 条消息到 SQLite（扫描 ${stats.files} 个文件，跳过未变化 ${stats.skipped} 个）`);
+        } else {
+          log(`[analytics] 历史 JSONL 无变化（扫描 ${stats.files} 个文件，跳过未变化 ${stats.skipped} 个）`);
+        }
       } catch (e) {
         log(`[analytics] 导入失败: ${e.message}`);
       } finally {
+        this._saveImportState(nextState);
         this.importState = 'done';
       }
     })();
     return this._importPromise;
+  }
+
+  // 读导入断点（文件缺失/损坏/形状不对一律按空——下次全量重导，幂等可自愈）
+  _loadImportState() {
+    try {
+      const data = JSON.parse(fs.readFileSync(this.importStateFile, 'utf8'));
+      return data && typeof data === 'object' ? data : {};
+    } catch {
+      return {};
+    }
+  }
+
+  // 写导入断点（原子替换；失败只记日志，下次启动重导，幂等）
+  _saveImportState(state) {
+    try {
+      writeFileAtomic(this.importStateFile, JSON.stringify(state));
+    } catch (e) {
+      log(`[analytics] 导入断点写入失败: ${e.message}`);
+    }
+  }
+
+  /**
+   * 删除早于 ts 的镜像行（数据保留策略用；调用方负责同时清理磁盘 JSONL，
+   * 且在 importHistory 之前执行，避免删掉的行又被 JSONL 导回）。
+   * @param {number} ts - 秒级时间戳（删除 time < ts）
+   * @returns {number} 实际删除行数（失败记日志返回 0）
+   */
+  pruneBefore(ts) {
+    try {
+      const r = this.db.prepare('DELETE FROM messages WHERE time < ?').run(Number(ts) || 0);
+      return Number(r.changes || 0);
+    } catch (e) {
+      log(`[analytics] 清理旧消息失败: ${e.message}`);
+      return 0;
+    }
   }
 
   // 内部：importHistory 的单文件批次单元。约每 1000 行一组事务（BEGIN/COMMIT），
@@ -191,15 +257,21 @@ export class Analytics {
   /**
    * 「最近 N 天活跃榜」文案（群内指令输出，可直接发；指令插件调用）。
    * 窗口 = now - days×86400 秒；按 user_id 分组计数，排除空名与 '未知'，取前 10。
+   * 传入 groupId 时只统计该群（2026-10 修复：原实现跨群聚合，任一群都能看到别的群成员名）；
+   * 不传则保持旧的全群口径（兼容既有调用/测试）。
    * @param {number} [days=7] - 统计窗口天数
+   * @param {string|number|null} [groupId=null] - 限定群号；null = 全部群
    * @returns {string} 榜单文案；窗口内无消息时返回提示语
    */
-  topActive(days = 7) {
+  topActive(days = 7, groupId = null) {
     const since = Math.floor(Date.now() / 1000) - days * 86400;
+    const scoped = groupId !== null && groupId !== undefined && groupId !== '';
+    // name 取 MAX：同一 user_id 换过群名片时不再随机挑一行
     const rows = this.db.prepare(
-      `SELECT name, COUNT(*) AS cnt FROM messages WHERE time >= ? AND name != '' AND name != '未知'
+      `SELECT MAX(name) AS name, COUNT(*) AS cnt FROM messages
+       WHERE time >= ? AND name != '' AND name != '未知'${scoped ? ' AND group_id = ?' : ''}
        GROUP BY user_id ORDER BY cnt DESC LIMIT 10`
-    ).all(since);
+    ).all(...(scoped ? [since, String(groupId)] : [since]));
     if (!rows.length) return `最近 ${days} 天没有消息记录`;
     return `【最近 ${days} 天活跃榜】\n` + rows.map((r, i) => `${i + 1}. ${r.name}（${r.cnt} 条）`).join('\n');
   }
@@ -243,12 +315,17 @@ export class Analytics {
   /**
    * 「群消息统计」文案（群内指令输出，可直接发；指令插件调用）。
    * 按群消息量降序，附每群总数与最近活跃距今天数。
+   * 传入 groupId 时只输出该群（2026-10 修复：原实现会把全部群号发到任意群，泄露跨群数据）。
+   * @param {string|number|null} [groupId=null] - 限定群号；null = 全部群（旧口径）
    * @returns {string} 统计文案；库内无任何记录时返回 '暂无消息统计'
    */
-  groupStats() {
+  groupStats(groupId = null) {
+    const scoped = groupId !== null && groupId !== undefined && groupId !== '';
     const rows = this.db.prepare(
-      `SELECT group_id, COUNT(*) AS cnt, MAX(time) AS last FROM messages GROUP BY group_id ORDER BY cnt DESC`
-    ).all();
+      scoped
+        ? `SELECT group_id, COUNT(*) AS cnt, MAX(time) AS last FROM messages WHERE group_id = ? GROUP BY group_id`
+        : `SELECT group_id, COUNT(*) AS cnt, MAX(time) AS last FROM messages GROUP BY group_id ORDER BY cnt DESC`
+    ).all(...(scoped ? [String(groupId)] : []));
     if (!rows.length) return '暂无消息统计';
     const now = Math.floor(Date.now() / 1000);
     return '【群消息统计】\n' + rows.map((r) => {
