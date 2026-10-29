@@ -16,8 +16,8 @@
     "replyAtUser": false,
     "humanize": {
       "enabled": true,
-      "minDelayMs": 400,
-      "maxDelayMs": 1800,
+      "minDelayMs": 1000,
+      "maxDelayMs": 5000,
       "maxBubbles": 3
     },
     "autoSpeak": {

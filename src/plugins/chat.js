@@ -1409,12 +1409,12 @@ export function createChatPlugin(deps) {
   /** 发一条回复：分条 + 停顿（humanize 关闭时退回纯切条、零延迟） */
   async function deliver(ctx, text, { at = false, question = '' } = {}) {
     const bubbles = humanizeOn ? splitBubbles(text) : splitMessage(text);
-    // 先「读」再「打字」：问题越长，首条消息来得越晚（封顶 1.2s，再受 maxDelay 约束）
-    const readMs = Math.min(1200, String(question || '').length * 20);
+    // 先「读」再「打字」：问题越长，首条消息来得越晚（封顶 2.2s，再受 maxDelay 约束）
+    const readMs = Math.min(2200, String(question || '').length * 20);
     for (let i = 0; i < bubbles.length; i++) {
       if (humanizeOn) {
         const base = i === 0 ? minDelay + readMs : minDelay * 0.8;
-        const delay = Math.min(maxDelay, base + Math.min(bubbles[i].length, 80) * 12);
+        const delay = Math.min(maxDelay, base + Math.min(bubbles[i].length, 160) * 12);
         const wait = jitter(delay);
         if (wait > 0) await sleep(wait);
       }
