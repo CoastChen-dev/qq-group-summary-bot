@@ -43,6 +43,7 @@ data/
 - 旧 v1 形状 `{"lastSeenTs": <秒>}`（2026-09 前版本遗留）：启动时**迁移播种**——按 `messages/` 下已有群目录逐个播种该单值，并保留进程内回退（本次启动新出现的群在首写 v2 前也按它起水位）；首次 `setLastSeenTs` 落盘即转 v2（播种过的群全量写进 `byGroup`）。
 - 解析失败按空（v2 各群按 0、迁移不播种）——backfill 退化为拉满 `backfill.maxHours`（默认 72h）；v2 形状存在时文件里残留的 v1 `lastSeenTs` 冗余键忽略不回退。
 - **原子写与损坏隔离（2026-10）**：state 文件、词典/缓存/用户记忆/会话历史/情节记忆统一经 `core/platform/atomic.js` 的 `writeFileAtomic`（同目录 .tmp → rename）；加载失败时原文件改名为 `<file>.corrupt-<时间戳>` 留证，不再「静默空表 → 下次写入覆盖旧数据」。
+- `state/report.json` → `{"lastReportDate": "YYYY-MM-DD"}`——report 插件记录今日日报已完成（发送成功或「无活跃群」）；启动补跑据此判断今天是否还缺一份，同日不重复。
 
 ## 3. SQLite（data/messages.db，node:sqlite 同步接口）
 

@@ -170,7 +170,9 @@ S# 编号保留为行为契约锚点（CLAUDE.md 红线与 refactor-proposal 保
 
 ### 6.2 每日日报 dailyReport（report 插件，hooks.start 经 scheduler.start 注册每日回调，时刻取 `report.hour/minute`，缺省 9:00）
 
-调度器实例归 report 插件所有：hooks.start → `scheduler.start(dailyReport)`（core/platform/scheduler.js 自驱每日循环），hooks.stop → `scheduler.stop()`（旧实现由 runtime 信号路径直调）。编排口径：守卫 `ready` + 配置了 `report.userId`。**昨日本地自然日** `[昨日00:00, 今日00:00)`；每群 `store.loadFromDisk(gid, yesterdayStart, todayStart)` 载入该日期段再 `collectRange` + 敏感过滤；消息数 ≥ `report.minMessages`(100) 才算活跃群；逐群 `summarizer.summarize(...,'daily')`，单群失败继续；全部失败则不发送；成功则以**合并转发**私聊发给 `report.userId`（标题节点 + 每群一个节点，2026-10 起；转发失败回退整条文本）。**不写任何 lastSummaryAt/lastSeen 状态**。
+调度器实例归 report 插件所有：hooks.start → `scheduler.start(dailyReport)`（core/platform/scheduler.js 自驱每日循环）+ 启动补跑检查定时器，hooks.stop → `scheduler.stop()` + 清补跑定时器。编排口径：守卫 `ready` + 配置了 `report.userId`。**昨日本地自然日** `[昨日00:00, 今日00:00)`；每群 `store.loadFromDisk(gid, yesterdayStart, todayStart)` 载入该日期段再 `collectRange` + 敏感过滤；消息数 ≥ `report.minMessages`(100) 才算活跃群；逐群 `summarizer.summarize(...,'daily')`，单群失败继续；全部失败则不发送；成功则以**合并转发**私聊发给 `report.userId`（标题节点 + 每群一个节点，2026-10 起；转发失败回退整条文本）。**不写任何 lastSummaryAt/lastSeen 状态**。
+
+**启动补跑（2026-10）**：调度器只在进程内触发，重启/断线错过 9:00 当天就没有日报（实测 10-27 机器人 09:44 才启动、当天未发）。hooks.start 另起检查定时器（首次最多 60s、此后 `catchUpIntervalMs` 默认 5 分钟）：已过今日触发时刻、WS 就绪、且 `data/state/report.json` 的 `lastReportDate` 不是今天 → 补跑一次；同进程同一天最多一次（LLM 失败留给下次启动重试）。发送成功或「无活跃群」写 `{"lastReportDate":"YYYY-MM-DD"}`；`dailyReport()` 外层互斥，避免 9:00 与补跑并发发两份。
 
 ### 6.3 数据刷新（refresh 插件 api.refresh，3 个触发源共用同一 runner）
 
@@ -238,3 +240,11 @@ filter.js 零 import；plugins 间零互 import（服务一律经 createApp 注�
 24. **缓存条目上限（2026-10）**：`llm.cacheMaxEntries`（默认 500）按 cachedAt 淘汰最旧，防缓存文件无限增长。
 
 25. **日报兜底切条（2026-10）**：合并转发失败时的整条私聊文本经 `splitMessage` 切条发送，避免超过私聊单条上限。
+
+26. **敏感过滤三档（2026-10 修复误伤）**：硬违规词整条剔除；隐私词只判「自述具体值 / 索取递交」句式；隐私正则兜底。「密码学」「流密码」「防诈骗」「自杀预防」「JAVA」这类正常讨论不再整条剔除（实测 10-28 群 1059541552 一天误删 55/1981 条）。出站 `isSensitiveOutbound` 与入站同口径。
+
+27. **词典最短词条 2 字（2026-10）**：`learn` 拒收单字/纯符号并返回 false（插件回执「词条太短或全是符号」）；`lookup` 跳过旧数据里的单字词条——否则一个「的」会命中几乎所有消息，把本地词典变成噪声源。
+
+28. **消息 id 兜底与写盘顺序（2026-10）**：缺 `message_id` 的实时消息用「时间 + 用户 + 文本 hash」合成 id（原来全部折叠成 "undefined" 只入第一条）；`_commit` 改为先 `appendFileSync` 成功、再推进内存与 lastSeen 水位（写失败不再留下永久缺口，backfill 仍可补回）。
+
+29. **日报启动补跑（2026-10）**：`data/state/report.json` 记 `lastReportDate`；启动/断线错过 9:00 时由 report 插件定时检查补跑一次，同日不重复（详见 §6.2）。

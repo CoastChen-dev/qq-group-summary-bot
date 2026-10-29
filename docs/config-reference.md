@@ -46,7 +46,7 @@
 | `dataRefresh.firstDelayMinutes` | number | `30` | refresh 插件 | 首次刷新延迟（启动后） |
 | `dataRefresh.announce` | boolean | `false` | refresh 插件 | `=== true` 才向群播报新增 6★/5★/新卡池 |
 | `dataDir` | string | `./data` | runtime（createApp 装配） | 运行数据根目录（相对路径按进程 cwd 解析） |
-| `filter.enabled` | boolean | `true` | runtime（filterMessages 包装；实现 core/platform/filter.js） | 敏感内容过滤开关（总结/日报前） |
+| `filter.enabled` | boolean | `true` | runtime（filterMessages 包装；实现 core/platform/filter.js） | 敏感内容过滤开关（总结/日报前）；2026-10 起三档口径（硬词 / 隐私自述或索取句式 / 隐私正则），「密码学」「防诈骗」等正常讨论不再误伤 |
 | `memory.enabled` | boolean | `true` | runtime（UserMemory 装配）+ memory 插件 + ChatBrain | 用户记忆总开关；false 时不加载不注入、指令回「记忆功能未启用」 |
 | `memory.file` | string | `<root>/data/user_memory.json` | UserMemory（core/platform/usermem.js） | 记忆文件路径（相对路径按项目根解析） |
 | `memory.autoExtract` | boolean | `true` | ChatBrain（_extractMemory） | 对话后自动提取记忆（`!== false` 视为开；每次回复多一次小 LLM 调用） |

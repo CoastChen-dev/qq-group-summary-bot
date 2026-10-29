@@ -35,7 +35,7 @@ QQ 对自动化账号有阶梯式风控（提示 → 限制 → 冻结 7/30 天 
    - 进程兜底：`main` 装 `core/platform/lifecycle.js` 的 installProcessGuards——未处理拒绝/未捕获异常只记日志不退出；SIGINT/SIGTERM → `app.stop()` + `analytics.close()` + 200ms 后 exit（勿在 createApp/start 里装，测试路径保持零信号副作用）
    - 贴表情：同群冷却 `emojiLike.cooldownSeconds`（默认 5s）
    - 发表情消息：同群发送间隔 `emojiLike.sendCooldownSeconds`（默认 3s，排队节流不丢弃）
-   - 出站内容：chat 插件发送前 `isSensitiveOutbound` 兜底（隐私模式 + 硬词表；闲聊里讨论密码/验证码/诈骗/自杀不再整条替换，2026-10 修正误伤）
+   - 出站内容：chat 插件发送前 `isSensitiveOutbound` 兜底（与入站同口径：硬词 + 隐私自述/索取 + 隐私模式；「密码学」「防诈骗」这类正常讨论不再整条替换，2026-10 修正误伤）
 6. **账号侧**：务必用小号；被风控后按 README「降低风控风险」恢复（手机验证 → 等 1–7 天 → 换网络），期间禁止反复扫码硬试。
 
 ## 代码规范（vibe house style）
