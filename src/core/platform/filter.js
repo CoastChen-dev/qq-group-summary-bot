@@ -1,8 +1,19 @@
-// 敏感内容过滤模块：识别群消息中的隐私信息（手机号/邮箱/身份证/银行卡/地址/IP）与敏感词，
-// 供消息入库与日报统计前剔除敏感消息、脱敏保留其余消息。
-// 导出：isSensitive / sanitizeText / filterMessages（均无副作用、无状态的纯函数）。
-// 依赖：无第三方依赖；由 core/runtime.js import filterMessages（经配置开关包装后作为消息过滤闸门，注入 summary/report 插件），isSensitive/sanitizeText 供本模块内部复用。
-// 数据：不读写任何文件；匹配模式、关键词表与脱敏占位符均为本文件私有常量。
+/*
+ * 敏感内容过滤模块：识别群消息中的个人信息与硬敏感词，供消息入库与日报统计前剔除敏感消息、脱敏保留其余消息。
+ *
+ * 三档口径（2026-10 重写；此前「密码」「诈骗」「自杀」「AV」等词直接整条剔除，实测一天误删
+ * 55/1981 条——「密码学」「流密码」「防诈骗」全被当成敏感内容，JAVA 还会命中 AV）：
+ *   ① HARD_KEYWORDS：真违规硬词，命中即整条剔除；
+ *   ② PRIVACY_CONTEXT：隐私词只在「自述具体值」或「索取/递交」句式下才判敏感
+ *      （密码学、密码忘了、验证码收不到、防诈骗 都不再命中）；
+ *   ③ PRIVACY_PATTERNS：手机号/邮箱/身份证/银行卡/地址/IP 等具体值正则（保持不变）。
+ * 出站（isSensitiveOutbound）与入站同口径，避免模型把隐私值说出去；两者保留独立入口，便于将来差异化。
+ *
+ * 导出：isSensitive / isSensitiveOutbound / sanitizeText / filterMessages（均无副作用纯函数）。
+ * 依赖：无；由 core/runtime.js import filterMessages（经配置开关包装后注入 summary/report 插件），
+ * isSensitive/sanitizeText 供本模块与 plugins/chat.js 使用。
+ * 数据：不读写任何文件；匹配模式、词表与脱敏占位符均为本文件私有常量。
+ */
 
 // 模块私有：隐私信息正则集（带 g 标志，调用前需重置 lastIndex）；命中即判为敏感，并被 sanitizeText 替换为占位符
 const PRIVACY_PATTERNS = [
@@ -20,67 +31,57 @@ const PRIVACY_PATTERNS = [
   /\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b/g,
 ];
 
-// 模块私有：命中即判为敏感的关键词表（隐私索取/违法/色情/自伤类），用于 isSensitive 的快速包含匹配
-const SENSITIVE_KEYWORDS = [
-  '身份证', '银行卡', '手机号', '电话号码', '住址', '家庭住址',
-  '密码', '验证码', '账号密码', '银行卡号', '身份证号',
-  '裸照', '裸聊', '色情', '黄色视频', 'AV', 'a片', '黄片', '自拍',
+// 模块私有：真违规硬词（命中即整条剔除；话题词如「诈骗/自杀/自拍」不在此列，由 summarizer 的
+// 输出约束兜底）。注意不要放 "AV" 这类会命中 JAVA/AVX 的短词。
+const HARD_KEYWORDS = [
+  '裸照', '裸聊', '色情', '黄色视频', '黄片', 'a片',
   '约炮', '卖淫', '嫖娼', '援助交际', '包养',
   '毒品', '冰毒', '海洛因', '大麻', '摇头丸',
   '枪支', '弹药', '爆炸物', '自制炸弹',
   '赌博', '博彩', '赌球', '六合彩',
-  '诈骗', '传销', '洗钱', '刷单兼职',
-  '自杀', '自残',
 ];
 
-// 模块私有：出站兜底只拦「角色不该自己说出口」的硬词（2026-10 修正误伤）。
-// 闲聊里讨论「密码 / 验证码 / 诈骗 / 自杀」是正常话题，整条替换会把正常回答也打成
-// 「这个话题我不太方便聊」；出站只保留隐私模式 + 这组硬词（入站仍用完整词表）。
-const HARD_SENSITIVE_KEYWORDS = [
-  '裸照', '裸聊', '色情', '黄片',
-  '约炮', '卖淫', '嫖娼', '援助交际', '包养',
-  '毒品', '冰毒', '海洛因', '大麻', '摇头丸',
-  '枪支', '弹药', '爆炸物', '自制炸弹',
-  '赌博', '博彩', '赌球', '六合彩',
-  '洗钱',
+// 模块私有：隐私词的上下文句式（2026-10：不再「出现关键词就整条剔除」）。
+// ① 自述具体值：我的密码是 abc123 / 密码：123456 / 身份证号是 110...
+//    —— 分隔符后必须跟 2+ 个非空白字符，且排除「是什么/是啥/是多少/是谁/是哪/是么/不是/忘了」这类提问
+// ② 索取/递交：把验证码发我 / 发一下你的手机号 / 私聊我密码
+const PRIVACY_CONTEXT = [
+  /(?:我的|我|本人)?[^，。！？\s]{0,4}(?:身份证号?|银行卡号?|手机号|电话号码|住址|家庭住址|账号密码|密码|验证码)\s*(?:是|为|：|:|=)\s*(?!(?:什么|啥|多少|谁|哪|么|不是|忘了|忘记))[^\s，。！？]{2,}/,
+  /(?:(?:发|给|报|填|输|告诉|提供|私聊)[^，。！？]{0,6}(?:身份证号?|银行卡号?|手机号|电话号码|住址|家庭住址|账号密码|密码|验证码))|(?:(?:身份证号?|银行卡号?|手机号|电话号码|住址|家庭住址|账号密码|密码|验证码)[^，。！？]{0,4}(?:发我|给我|发一下|报一下|私聊我))/,
 ];
 
 // 模块私有：脱敏时的替换占位符（仅替换隐私模式匹配段，不替换关键词本身）
 const PLACEHOLDER = '[内容已过滤]';
 
 /**
- * 判断文本是否命中敏感词（隐私索取/违法/色情/自伤类）或隐私模式（手机号/邮箱/身份证/银行卡/地址/IP 等）。
+ * 判断文本是否命中硬敏感词、隐私自述/索取句式或隐私模式（手机号/邮箱/身份证/银行卡/地址/IP）。
  * @param {string} text - 待检测文本
- * @returns {boolean} 命中任一关键词或隐私模式返回 true；空文本或未命中返回 false
+ * @returns {boolean} 命中任一规则返回 true；空文本或未命中返回 false
  */
 export function isSensitive(text) {
   if (!text) return false;
-  for (const kw of SENSITIVE_KEYWORDS) {
+  for (const kw of HARD_KEYWORDS) {
     if (text.includes(kw)) return true;
   }
-  for (const re of PRIVACY_PATTERNS) {
-    re.lastIndex = 0; // 带 g 标志的正则需重置，避免跨调用 lastIndex 残留
+  for (const re of PRIVACY_CONTEXT) {
+    re.lastIndex = 0;
     if (re.test(text)) return true;
-  }
-  return false;
-}
-
-/**
- * 出站敏感判定（2026-10）：只命中隐私模式或 HARD_SENSITIVE_KEYWORDS（角色不该输出的硬词），
- * 不再用入站完整词表——「密码/验证码/诈骗/自杀」等正常讨论词不再整条替换。
- * @param {string} text - 待检测的模型回复
- * @returns {boolean} 命中返回 true（调用方替换为安全文案）
- */
-export function isSensitiveOutbound(text) {
-  if (!text) return false;
-  for (const kw of HARD_SENSITIVE_KEYWORDS) {
-    if (text.includes(kw)) return true;
   }
   for (const re of PRIVACY_PATTERNS) {
     re.lastIndex = 0;
     if (re.test(text)) return true;
   }
   return false;
+}
+
+/**
+ * 出站敏感判定（2026-10）：与入站同口径（硬词 + 隐私自述/索取 + 隐私模式）。
+ * 保留独立入口：将来若要给「模型回复」更严/更宽的规则，不必改入站过滤。
+ * @param {string} text - 待检测的模型回复
+ * @returns {boolean} 命中返回 true（调用方替换为安全文案）
+ */
+export function isSensitiveOutbound(text) {
+  return isSensitive(text);
 }
 
 /**

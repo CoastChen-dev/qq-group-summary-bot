@@ -214,8 +214,10 @@ export class WebUI {
           return this._json(res, { ok, term: body.term });
         }
         if (body.term && body.meaning) {
-          this.ctx.getLingo().learn(String(body.term), String(body.meaning));
-          return this._json(res, { ok: true, term: body.term });
+          const ok = this.ctx.getLingo().learn(String(body.term), String(body.meaning));
+          return this._json(res, ok
+            ? { ok: true, term: body.term }
+            : { ok: false, term: body.term, error: '词条太短或全是符号（至少 2 个字）' });
         }
         return this._json(res, { ok: false, error: '缺少 term 或 meaning' });
       }
@@ -361,7 +363,8 @@ function escAttr(s) { return esc(s).replace(/"/g, '&quot;').replace(/'/g, '&#39;
 async function addLingo() {
   const term = $('newTerm').value.trim(), meaning = $('newMeaning').value.trim();
   if (!term || !meaning) return toast('请填写词条和释义');
-  await api('/api/lingo', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ term, meaning }) });
+  const r = await api('/api/lingo', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ term, meaning }) });
+  if (!r.ok) return toast('添加失败：' + (r.error || '词条不合规'));
   $('newTerm').value = ''; $('newMeaning').value = '';
   toast('已添加：' + term);
   loadLingo();

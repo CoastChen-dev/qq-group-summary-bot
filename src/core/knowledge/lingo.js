@@ -56,6 +56,7 @@ export class LingoStore {
 
   /**
    * 在词典中查找与文本匹配的词条：忽略大小写的子串包含匹配，按插入顺序返回第一个命中。
+   * 单字/纯符号词条（旧数据可能残留）不参与匹配（2026-10：一个「的」会命中几乎所有消息）。
    * @param {string} text - 待查文本
    * @returns {{term: string, meaning: string}|null} 命中返回 {term: 存储时的词条原样, meaning: 释义}；空文本或未命中返回 null
    */
@@ -63,7 +64,9 @@ export class LingoStore {
     if (!text) return null;
     const lower = String(text).toLowerCase();
     for (const [key, value] of this.entries) {
-      if (lower.includes(String(key).toLowerCase())) {
+      const k = String(key);
+      if (k.trim().length < 2) continue; // 2026-10：旧数据里的单字词条不再参与匹配
+      if (lower.includes(k.toLowerCase())) {
         return { term: key, meaning: value };
       }
     }
@@ -72,15 +75,21 @@ export class LingoStore {
 
   /**
    * 学习（新增或覆盖）一个词条并立即落盘。
-   * @param {string} term - 词条文本；空值直接忽略，存盘前去除首尾空白
+   * 2026-10：词条至少 2 个字符且含文字/数字——单字或纯符号词条会命中几乎全部消息，
+   * 把「高可信本地词典」变成噪声源（实测 `学习 的=助词` 后所有含「的」的消息都命中）。
+   * @param {string} term - 词条文本；空/过短/纯符号返回 false
    * @param {string} meaning - 对应释义（存盘前去除首尾空白）
-   * @returns {void} 副作用：写回 lingo.json 并打印学习日志
+   * @returns {boolean} 是否写入；false = 词条不合规（调用方据此回执）
+   * 副作用：写回 lingo.json 并打印学习日志
    */
   learn(term, meaning) {
-    if (!term) return;
-    this.entries.set(String(term).trim(), String(meaning).trim());
+    const t = String(term ?? '').trim();
+    if (t.length < 2) return false;
+    if (!/[\p{L}\p{N}]/u.test(t)) return false; // 纯标点/符号不行
+    this.entries.set(t, String(meaning ?? '').trim());
     this._save();
-    log(`[lingo] 已学习新词条: ${term}`);
+    log(`[lingo] 已学习新词条: ${t}`);
+    return true;
   }
 
   /**

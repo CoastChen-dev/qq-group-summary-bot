@@ -37,7 +37,7 @@ export function createLingoPlugin() {
         const term = m[2].trim();
         const meaning = m[3].trim();
         if (meaning.length < 2) return '释义太短了，请用「学习 词=释义」的格式，比如：学习 轮椅轴=指用强力干员挂机过关的套路';
-        ctx.lingo.learn(term, meaning);
+        if (!ctx.lingo.learn(term, meaning)) return '词条太短或全是符号（至少 2 个字），换一个试试';
         log(`[cmd] 学习词条: ${term} → ${meaning.slice(0, 30)}`);
         return `已学习词条：${term} → ${meaning}`;
       }

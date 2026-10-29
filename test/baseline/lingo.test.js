@@ -93,3 +93,24 @@ describe('LingoStore', () => {
     assert.ok(fs.existsSync(file));
   });
 });
+
+describe('最短词条限制（2026-10）', () => {
+  it('单字/纯符号拒学；2 字以上可学', () => {
+    const store = new LingoStore(path.join(makeTmp(), 'lingo.json'));
+    assert.equal(store.learn('的', '助词'), false);
+    assert.equal(store.learn('！', '标点'), false);
+    assert.equal(store.learn('  ', '空白'), false);
+    assert.equal(store.size(), 0);
+    assert.equal(store.learn('M3', '代号'), true);
+    assert.equal(store.size(), 1);
+  });
+
+  it('lookup 跳过旧数据里的单字词条', () => {
+    const dir = makeTmp();
+    const file = path.join(dir, 'lingo.json');
+    fs.writeFileSync(file, JSON.stringify({ '的': '助词', '轮椅轴': '挂机套路' }));
+    const store = new LingoStore(file);
+    assert.equal(store.lookup('我的天'), null);
+    assert.deepEqual(store.lookup('轮椅轴真好用'), { term: '轮椅轴', meaning: '挂机套路' });
+  });
+});

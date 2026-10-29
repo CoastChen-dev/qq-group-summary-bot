@@ -426,6 +426,17 @@ export class MessageStore {
     if (!u) g.users.set(rec.userId, { name: rec.name, card: rec.card || rec.name });
   }
 
+  // 消息 id（2026-10）：OneBot 群消息正常都带 message_id；缺失时用「时间 + 用户 + 文本 hash」
+  // 合成，否则所有缺 id 的消息都会折叠成 "undefined"，只有第一条能入库。
+  _messageId(event, text) {
+    const raw = event.message_id ?? event.messageId;
+    if (raw !== undefined && raw !== null && raw !== '') return String(raw);
+    let h = 5381;
+    for (let i = 0; i < text.length; i++) h = (((h << 5) + h) ^ text.charCodeAt(i)) >>> 0;
+    const ts = event.time ?? Math.floor(Date.now() / 1000);
+    return `local-${ts}-${event.user_id ?? 0}-${h.toString(36)}`;
+  }
+
   /**
    * 落一条实时群消息（OneBot group_message 事件）→ 归一为记录 → 内存 + JSONL 追加。
    * 图片/表情等段会以 [图片] 等占位符形态正常入库；仅当归一文本为空串
@@ -443,7 +454,7 @@ export class MessageStore {
     const text = extractText(event.message) || event.raw_message || '';
     if (!text) return null;
     const rec = {
-      id: String(event.message_id),
+      id: this._messageId(event, text),
       time: event.time ?? Math.floor(Date.now() / 1000),
       userId: event.user_id,
       name: event.sender?.card || event.sender?.nickname || '未知',
@@ -491,15 +502,17 @@ export class MessageStore {
   // （addMessage 用；历史补偿不移在线水位，见 addHistoryMessage 的 JSDoc）
   _commit(groupId, g, rec, { touchLastSeen = false } = {}) {
     if (this.writtenIds.has(`${groupId}:${rec.id}`)) return null;
+    // 先写盘、后推进内存与水位（2026-10）：appendFileSync 失败时水位不越过这条消息、
+    // 去重闸也不登记，下一次 backfill 仍能把消息补回来（原来先推水位，写失败会留下永久缺口）。
+    const file = this._fileFor(groupId, localDate(rec.time * 1000));
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.appendFileSync(file, JSON.stringify(rec) + '\n');
     g.messages.set(rec.id, rec);
     if ((rec.time ?? 0) > g.newestTime) g.newestTime = rec.time;
     this.writtenIds.add(`${groupId}:${rec.id}`);
     this._learnUser(g, rec);
     // 实时消息是热路径：水位只推进内存 + 节流落盘（2026-10；backfill/stop 走即时落盘）
     if (touchLastSeen) this.setLastSeenTs(groupId, rec.time, { persist: false });
-    const file = this._fileFor(groupId, localDate(rec.time * 1000));
-    fs.mkdirSync(path.dirname(file), { recursive: true });
-    fs.appendFileSync(file, JSON.stringify(rec) + '\n');
     this._pruneMessages(groupId, g);
     return rec;
   }

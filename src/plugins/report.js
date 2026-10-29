@@ -15,13 +15,21 @@
  * 「合并转发」私聊发给 reportUserId（标题节点 + 每群一个节点；转发失败回退整条文本）。
  * 全程不写 lastSummaryAt/lastSeen 状态。
  *
+ * 启动补跑（2026-10）：调度器只在进程内触发，重启/断线错过 9:00 当天就没有日报（实测 10-27
+ * 机器人 09:44 才启动，当天未发）。hooks.start 后每 catchUpIntervalMs 检查一次：已过今日触发
+ * 时刻、未记录今日已发、WS 就绪 → 补跑一次（同进程同一天最多一次，避免 LLM 失败后反复重试）；
+ * 发送成功或「无活跃群」把日期写入 data/state/report.json。
+ *
  * 依赖：logger；服务/配置经 createReportPlugin(deps) 注入（scheduler/就绪标志属 runtime 资产，
  * 经 deps 移交；getAllGroupIds 与 backfillHistory 共用、现居 core/routing.js 工厂并经 deps 注入）；
  * 实例化点：core/runtime.js createApp 装配期。
  * 读写数据：读消息存储（loadFromDisk/collectRange）；经 summarizer 调 LLM 概括；私聊经 client。
  */
+import fs from 'node:fs';
 import { log, err } from '../core/platform/logger.js';
 import { splitMessage } from '../core/platform/text.js';
+import { writeFileAtomic } from '../core/platform/atomic.js';
+import { localDate } from '../core/platform/store.js';
 
 /**
  * 每日日报插件描述符构造：{name:'report', priority: 0, handleMessage, hooks:{start,stop}}。
@@ -38,6 +46,10 @@ import { splitMessage } from '../core/platform/text.js';
  * @param {number} deps.reportUserId - 日报私聊收件人（config.report.userId；0/缺省 = 不启用）
  * @param {number} deps.reportMinMessages - 活跃群消息门槛（config.report.minMessages ?? 100）
  * @param {Function} deps.isReady - () => boolean，WS 就绪锚点
+ * @param {number} [deps.reportHour=9] - 日报触发小时（补跑检查用）
+ * @param {number} [deps.reportMinute=0] - 日报触发分钟
+ * @param {string} [deps.stateFile] - 日报状态文件（如 data/state/report.json）；空 = 不落盘（测试）
+ * @param {number} [deps.catchUpIntervalMs=300000] - 启动补跑检查间隔（缺省 5 分钟）
  * @returns {Object} 注册表可直接 register 的插件描述符
  */
 export function createReportPlugin(deps) {
@@ -45,6 +57,36 @@ export function createReportPlugin(deps) {
   const reportUserId = deps.reportUserId || 0;
   const reportMinMessages = deps.reportMinMessages ?? 100;
   const isReady = deps.isReady;
+  const reportHour = Number(deps.reportHour ?? 9);
+  const reportMinute = Number(deps.reportMinute ?? 0);
+  const stateFile = deps.stateFile || '';
+  // 下限 10ms 只服务测试注入；生产缺省 5 分钟
+  const catchUpIntervalMs = Math.max(10, Number(deps.catchUpIntervalMs ?? 5 * 60 * 1000));
+  let catchUpTimer = null;
+  let firstCheckTimer = null;
+  let lastCatchUpDate = '';
+  let reportRunning = false;
+
+  // 读今日已发日期（缺失/损坏返回空串——安全侧：下次启动会重新补跑）
+  function readLastReportDate() {
+    if (!stateFile) return '';
+    try {
+      const data = JSON.parse(fs.readFileSync(stateFile, 'utf8'));
+      return typeof data?.lastReportDate === 'string' ? data.lastReportDate : '';
+    } catch {
+      return '';
+    }
+  }
+
+  // 标记今日日报已完成（发送成功或明确「无活跃群」；生成失败不标记，留给下次启动重试）
+  function markReportedToday() {
+    if (!stateFile) return;
+    try {
+      writeFileAtomic(stateFile, JSON.stringify({ lastReportDate: localDate(Date.now()) }));
+    } catch (e) {
+      log(`[report] 日报状态写入失败: ${e.message}`);
+    }
+  }
 
   /**
    * 日报标题用群名查询：get_group_info 失败或无群名时回退群号字符串，不向外抛。
@@ -61,16 +103,16 @@ export function createReportPlugin(deps) {
   }
 
   /**
-   * 每日日报编排（§6.2；scheduler 每日 9:00 的回调）：守卫 isReady 与 reportUserId
-   * （未配置则跳过）；口径 = 昨日本地自然日 [昨日00:00, 今日00:00) —— 每群
-   * loadFromDisk(gid, yesterdayStart, todayStart) 载入该日期段再 collectRange + 敏感过滤，
+   * 每日日报编排正文（§6.2；由 dailyReport() 互斥包装后供 scheduler 与启动补跑调用）：
+   * 守卫 isReady 与 reportUserId（未配置则跳过）；口径 = 昨日本地自然日 [昨日00:00, 今日00:00)
+   * —— 每群 loadFromDisk(gid, yesterdayStart, todayStart) 载入该日期段再 collectRange + 敏感过滤，
    * 消息数 ≥ reportMinMessages(100) 才算活跃群 → 逐群 summarize(...,'daily')（单群失败继续），
    * 全部失败则不发送；成功则私聊发给 report.userId。全程不写 lastSummaryAt/lastSeen 状态。
    *
    * @returns {Promise<void>}
    * 副作用：私聊发送日报消息
    */
-  async function dailyReport() {
+  async function runDailyReport() {
     if (!isReady()) return;
     if (!reportUserId) {
       log('[report] 未配置 report.userId，跳过日报');
@@ -112,6 +154,7 @@ export function createReportPlugin(deps) {
 
     if (activeGroups.length === 0) {
       log(`[report] 昨日(${yesterdayLabel})无活跃群（≥${reportMinMessages}条），跳过`);
+      markReportedToday(); // 今日已处理（无活跃群也算完成，避免补跑每 5 分钟重试）
       return;
     }
 
@@ -160,6 +203,42 @@ export function createReportPlugin(deps) {
         await client.sendPrivateMsg(reportUserId, part);
       }
     }
+    markReportedToday(); // 日报已送达：记录今日，补跑检查不再重复
+  }
+
+  /**
+   * 日报入口（调度器每日触发与启动补跑共用）：互斥执行，防止 9:00 与补跑同时发两份。
+   * @returns {Promise<void>}
+   */
+  async function dailyReport() {
+    if (reportRunning) {
+      log('[report] 日报已在生成中，跳过本次触发');
+      return;
+    }
+    reportRunning = true;
+    try {
+      await runDailyReport();
+    } finally {
+      reportRunning = false;
+    }
+  }
+
+  /**
+   * 启动补跑检查（2026-10）：日报只在进程内 9:00 触发，重启/断线错过就整天没有。
+   * 已过今日触发时刻、未记录今日已发、WS 就绪 → 补跑一次；同进程同一天最多一次，
+   * 避免 LLM 失败后每 5 分钟重试烧 token。
+   * @returns {void}
+   */
+  function maybeCatchUp() {
+    if (!reportUserId || !isReady()) return;
+    const now = new Date();
+    if (now.getHours() * 60 + now.getMinutes() < reportHour * 60 + reportMinute) return; // 还没到今日触发时刻
+    const today = localDate(now.getTime());
+    if (readLastReportDate() === today) return; // 今日已发/已处理过
+    if (lastCatchUpDate === today) return; // 本进程今天已尝试过（失败等下次启动）
+    lastCatchUpDate = today;
+    log(`[report] 今日日报尚未发送（错过 ${reportHour}:${String(reportMinute).padStart(2, '0')} 或启动较晚），补跑一次`);
+    dailyReport().catch((e) => err('[report] 日报补跑失败:', e.message));
   }
 
   return {
@@ -170,13 +249,19 @@ export function createReportPlugin(deps) {
       return null;
     },
     hooks: {
-      /** 注册每日 9:00 日报调度（scheduler 循环：每天触发 dailyReport 后自动排下一天） */
+      /** 注册每日 9:00 日报调度；另起启动补跑检查（首次最多 60s 后、此后每 catchUpIntervalMs） */
       start() {
         scheduler.start(dailyReport);
+        firstCheckTimer = setTimeout(maybeCatchUp, Math.min(catchUpIntervalMs, 60 * 1000));
+        firstCheckTimer.unref?.(); // 不拖住进程退出（测试/停服）
+        catchUpTimer = setInterval(maybeCatchUp, catchUpIntervalMs);
+        catchUpTimer.unref?.();
       },
-      /** 停服：停掉每日调度器（原 runtime.stop/信号路径直调 scheduler.stop 的位置） */
+      /** 停服：停掉每日调度器与补跑检查定时器 */
       stop() {
         scheduler.stop();
+        if (firstCheckTimer) { clearTimeout(firstCheckTimer); firstCheckTimer = null; }
+        if (catchUpTimer) { clearInterval(catchUpTimer); catchUpTimer = null; }
       },
     },
   };

@@ -77,6 +77,13 @@ describe('词典学习/维护（规则 1-4）', () => {
     assert.equal(tryCommand(ctx, `学习 ${'词'.repeat(21)} 释义`), null);
   });
 
+  it('词条太短/纯符号拒学（2026-10）', (t) => {
+    const ctx = makeCtx();
+    assert.equal(tryCommand(ctx, '学习 的=助词'), '词条太短或全是符号（至少 2 个字），换一个试试');
+    assert.equal(tryCommand(ctx, '学习 ！=标点'), '词条太短或全是符号（至少 2 个字），换一个试试');
+    assert.equal(ctx.lingo.size(), 0);
+  });
+
   it('「忘记/删除/删 词」：存在则删、不存在如实提示', (t) => {
     const ctx = makeCtx();
     ctx.lingo.learn('过期梗', '旧释义');

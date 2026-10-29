@@ -462,3 +462,29 @@ describe('lastSeen 节流与磁盘保留（2026-10）', () => {
     assert.deepEqual(fs.readdirSync(gdir), ['2026-02-01.jsonl']);
   });
 });
+
+describe('消息 id 兜底与写盘顺序（2026-10）', () => {
+  it('缺 message_id：用时间+用户+文本 hash 合成 id，不再折叠成 "undefined"', () => {
+    const dir = makeTmp();
+    const store = new MessageStore(dir);
+    const ev = (text, time) => makeEvent({ message_id: undefined, time, message: [{ type: 'text', data: { text } }] });
+    const a = store.addMessage(ev('甲说', 1790000000));
+    const b = store.addMessage(ev('乙说', 1790000001));
+    assert.ok(a && b);
+    assert.notEqual(a.id, b.id);
+    assert.ok(a.id.startsWith('local-') && b.id.startsWith('local-'));
+  });
+
+  it('append 失败：不推进水位、不登记去重闸、不写内存', () => {
+    const dir = makeTmp();
+    const gdir = path.join(dir, 'messages', GID);
+    fs.mkdirSync(gdir, { recursive: true });
+    fs.mkdirSync(path.join(gdir, `${DAY_STR}.jsonl`), { recursive: true }); // 目录占位让 appendFileSync 抛错
+    const store = new MessageStore(dir);
+    const before = store.getLastSeenTs(GID);
+    assert.throws(() => store.addMessage(makeEvent()));
+    assert.equal(store.getLastSeenTs(GID), before);
+    assert.equal(store.writtenIds.has(`${GID}:1001`), false);
+    assert.equal(store.groups.get(GID)?.messages.has('1001'), false);
+  });
+});

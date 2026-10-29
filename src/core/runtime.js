@@ -236,6 +236,8 @@ export function createApp(config, overrides = {}) {
     trackedGroups, getAllGroupIds: routing.getAllGroupIds,
     episodic,
     reportUserId, reportMinMessages,
+    reportHour, reportMinute,
+    stateFile: path.join(dataDir, 'state', 'report.json'),
     isReady: () => state.ready,
   });
   const chatPlugin = createChatPlugin({

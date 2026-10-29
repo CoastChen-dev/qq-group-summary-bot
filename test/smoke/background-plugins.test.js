@@ -11,14 +11,17 @@
  */
 import { after, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
 
 import { PluginRegistry } from '../../src/core/registry.js';
 import { createSummaryPlugin } from '../../src/plugins/summary.js';
 import { createRefreshPlugin } from '../../src/plugins/refresh.js';
 import { createReportPlugin } from '../../src/plugins/report.js';
-import { silenceLog } from '../helpers.js';
+import { cleanupTmpDirs, makeTmp, silenceLog } from '../helpers.js';
 
 after(silenceLog());
+after(cleanupTmpDirs);
 
 const tick = (ms = 20) => new Promise((r) => setTimeout(r, ms));
 // 敏感过滤原样放行（enabled 开关由 runtime 包装，插件只消费包装结果）
@@ -426,5 +429,72 @@ describe('summary 概括窗口上限（2026-10）', () => {
     reg.dispatch({ groupId: 4, text: '总结' });
     await tick();
     assert.deepEqual(loaded, [since]);
+  });
+});
+
+describe('report 日报补跑（2026-10）', () => {
+  function mkCatchUp({ reportHour = 0, reportMinute = 0, interval = 10, stateFile, ready = true } = {}) {
+    let summaries = 0;
+    const plugin = createReportPlugin({
+      store: {
+        loadFromDisk: () => {},
+        collectRange: () => [{ time: Math.floor(Date.now() / 1000), text: '摸鱼' }],
+      },
+      client: {
+        selfId: 1,
+        getGroupInfo: async () => ({ group_name: '测试群' }),
+        sendPrivateForward: async () => {},
+        sendPrivateMsg: async () => {},
+      },
+      summarizer: { summarize: async () => { summaries++; return '日报内容'; } },
+      scheduler: { start: () => {}, stop: () => {} },
+      filterMessages: passThrough,
+      trackedGroups: () => [1],
+      getAllGroupIds: async () => [1],
+      reportUserId: 9,
+      reportMinMessages: 1,
+      reportHour,
+      reportMinute,
+      stateFile,
+      catchUpIntervalMs: interval,
+      isReady: () => ready,
+    });
+    return { plugin, get summaries() { return summaries; } };
+  }
+
+  const todayLocal = () => {
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  };
+
+  it('已过触发时刻且今日未发：自动补跑一次并记录日期；同日不重复', async () => {
+    const stateFile = path.join(makeTmp(), 'report.json');
+    const h = mkCatchUp({ stateFile });
+    h.plugin.hooks.start();
+    await tick(60);
+    h.plugin.hooks.stop();
+    assert.equal(h.summaries, 1);
+    assert.equal(JSON.parse(fs.readFileSync(stateFile, 'utf8')).lastReportDate, todayLocal());
+    await tick(40);
+    assert.equal(h.summaries, 1); // 已记录今日，不再补跑
+  });
+
+  it('未到触发时刻 / WS 未就绪：不补跑、不写状态', async () => {
+    const dir = makeTmp();
+    const state1 = path.join(dir, 'report-a.json');
+    const h1 = mkCatchUp({ reportHour: 23, reportMinute: 59, stateFile: state1 });
+    h1.plugin.hooks.start();
+    await tick(50);
+    h1.plugin.hooks.stop();
+    assert.equal(h1.summaries, 0);
+    assert.equal(fs.existsSync(state1), false);
+
+    const state2 = path.join(dir, 'report-b.json');
+    const h2 = mkCatchUp({ stateFile: state2, ready: false });
+    h2.plugin.hooks.start();
+    await tick(50);
+    h2.plugin.hooks.stop();
+    assert.equal(h2.summaries, 0);
+    assert.equal(fs.existsSync(state2), false);
   });
 });
