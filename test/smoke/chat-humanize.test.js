@@ -14,13 +14,13 @@ after(silenceLog());
 
 const tick = (ms = 10) => new Promise((r) => setTimeout(r, ms));
 
-function mkPlugin(humanize = {}) {
+function mkPlugin(humanize = {}, replyOverride = '') {
   const sent = [];
   const client = {
     sendGroupMsg: async (gid, msg) => { sent.push({ gid, msg }); },
     sendGroupMsgAt: async (gid, uid, msg) => { sent.push({ gid, uid, msg, at: true }); },
   };
-  const reply = '第一句要写得足够长一些才能触发分条效果。第二句同样要长一点，不然会被合并。第三句继续凑字数，让整体超过六十个字。第四句收尾。';
+  const reply = replyOverride || '第一句要写得足够长一些才能触发分条效果。第二句同样要长一点，不然会被合并。第三句继续凑字数，让整体超过六十个字。第四句收尾。';
   const brain = { chat: async () => reply };
   const plugin = createChatPlugin({
     brain, client,
@@ -40,6 +40,15 @@ describe('像真人打字：分条与停顿', () => {
     assert.equal(sent.map((s) => s.msg).join(''), reply);
     assert.equal(sent[0].at, true);
     assert.ok(sent.slice(1).every((s) => !s.at));
+  });
+
+  it('>40 字的两句话也会拆成两条，更像连发而不是一段', async () => {
+    const reply = '矩阵的秩就是它线性无关的行（或列）的最大个数啦，也就是行空间或列空间的维数。大概这样~';
+    const { plugin, sent } = mkPlugin({}, reply);
+    plugin.handleMessage({ ...ctx, text: '秩是什么' });
+    await tick(30);
+    assert.equal(sent.length, 2);
+    assert.equal(sent.map((s) => s.msg).join(''), reply);
   });
 
   it('humanize 关闭：整段一条发出（未超 QQ 单条上限）', async () => {

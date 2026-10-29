@@ -56,6 +56,7 @@ describe('ChatBrain buildMessages 实名上下文与用户记忆', () => {
     const brain = new ChatBrain({ cfg: {} });
     const msgs = brain.buildMessages('g1', '真实昵称XYZ', '波登可是谁', '知识上下文', 'u9');
     assert.equal(msgs[0].role, 'system');
+    assert.match(msgs[0].content, /当前时间：/); // 时间感（2026-10）：所有回复都知道现在几点
     const user = msgs[msgs.length - 1];
     assert.ok(user.content.startsWith('真实昵称XYZ：波登可是谁'));
     assert.ok(!JSON.stringify(msgs).includes('u9'), 'QQ 不得进 prompt');

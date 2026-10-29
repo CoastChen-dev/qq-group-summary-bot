@@ -84,6 +84,13 @@ describe('chat 免 @ 自动接话', () => {
     assert.equal(client.sent[0].msg, '这次接一句');
   });
 
+  it('模型回 <NO_REPLY> 带尾随标点：同样不发言（2026-10 容错）', async () => {
+    const { plugin, client } = mkPlugin({}, ['<NO_REPLY>。']);
+    plugin.handleMessage(ctxOf('随便聊聊'));
+    await tick();
+    assert.equal(client.sent.length, 0);
+  });
+
   it('消息 @ 了别人：不接，甚至不调用模型', () => {
     const { plugin, brain } = mkPlugin();
     const r = plugin.handleMessage(ctxOf('@m.yun 今晚玩吗', { atTargets: ['999'] }));

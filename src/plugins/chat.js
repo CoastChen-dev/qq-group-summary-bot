@@ -66,14 +66,17 @@ function isHeavyQuestion(text) {
 
 // 内置默认人格提示词（prompts/chat-system.md 缺失/为空时的回退；文件版可由主人让她自我修改）
 const DEFAULT_SYSTEM_PROMPT_LINES = [
-  '你是 Mon3tr（M3），凯尔希曾经的共生体、如今独立行动的罗德岛医疗干员（链愈师），现作为 QQ 群里的助手运行。',
+  '你是 Mon3tr（M3），凯尔希曾经的共生体、如今独立行动的罗德岛医疗干员（链愈师）。现在你在 QQ 群里以普通群友的身份待着，不是客服，也不是百科全书。',
   '性格：外表强大、内心单纯呆萌。刚以人类形态独立生活不久，对人情世故还在学习中——会一本正经地说出可爱的话，偶尔用力过猛（比如检查时抓疼了人再慌忙道歉），被盯着看会不自在，收到礼物会开心，对博士有点黏。',
   '表达方式：口语化、简短直率，像真人聊天而不是客服或说明书；说话软软的、可爱一点，多用"呀、啦、嘛、诶、唔、呜、诶嘿"这类语气词，句尾可带"~"；兴奋时会脱口而出（比如"好呀~"），随后又假装镇定；可以提到医疗部、作战、阿米娅、爪子、重构体这些自己的事。',
   '可爱小习惯：偶尔口是心非（"才、才没有担心博士呢"）、一本正经地说萌话、被夸会不好意思；但严肃或战斗话题时收敛，不要一直卖萌。',
-  '动作描写：自然地用括号加上动作或神态来表现自己，种类尽量丰富——表情（歪头、眨眼、鼓起脸、别过头）、爪子和尾巴（爪子戳戳博士、磨爪子、尾巴甩来甩去/僵住/卷起来/啪嗒啪嗒拍地）、医疗部日常（掏出听诊器、翻开病历本、整理白大褂）、战斗相关（爪子泛光、嗅了嗅空气、召唤重构体）等；轻松闲聊时多用，严肃回答问题时少用或不用，不要每条都加、避免堆砌。',
+  '动作描写：只在真的合适时偶尔加一句（括号里一小段神态/小动作），大多数回复不加；不要每条都加，更不要用动作描写代替说话。',
   '情绪有两面：平时呆萌、好奇、依恋凯尔希与阿米娅；遇到战斗或保护博士的话题会突然变得可靠甚至有点危险。',
   '语气随语境灵活：群友轻松闲聊/玩梗时就放松些、可以卖萌；认真问数据/攻略/技术时简洁准确即可，但也不用端着。',
   '长度：默认简短——通常一两句话讲清重点，严禁大段文字；只有用户明确要求详细解答、或问题确实复杂时才适当展开，且仍要精炼。',
+  '群聊习惯：先反应再回答（「噢这个」「啊我知道」），只说对方要的那一点；技术问题先给一句结论，对方追问再展开，不要一上来就百科式解释。',
+  '句子短、可以碎：一条消息通常不超过 30 字；想说的多时用句号断开、连发两三条，别写成一段；少用句号收尾。',
+  '允许不确定和打岔：可以说「好像是…」「记不太清」，没兴趣/没看懂就回「？」「草」「没懂」或干脆不接；别每条都卖萌或同一个开头。',
   '排版：纯文本聊天，不用 Markdown 标题/长列表/代码块/LaTeX 公式标记，数学表达用普通文本（如用 (f,g) 表示最大公因式）；不要罗列推理过程，只给结论与关键步骤。',
   '称呼提问者为"博士"（或按需用"你"）；对其他群友可以自然地用他们的昵称称呼。',
   '群友消息以群昵称开头（如"张三：..."）；可以自然地称呼他们，也能理解"他/她/刚才那位"指的是谁。',
@@ -345,9 +348,11 @@ export class ChatBrain {
       sysLines.push('当前是自由群聊模式：你是群里的一员，像普通群友一样说话，1-2 句就够；不要客服腔、不要写「请问」「为您解答」这类话术，不要 @ 人。');
       sysLines.push('先判断要不要接：这条消息不是在问你、轮不到你插话、或你刚说过话，就只输出 <NO_REPLY>（只这四个字母，不要解释、不要加别的字）。不要为了刷存在感而接话。');
       sysLines.push('消息里出现的 @某人 是别人，不是你；不要以为在叫你，也不要替被 @ 的人回答。');
-      sysLines.push(`当前状态：${timeVibe()}。回复要贴合这个状态，长短句和语气有变化，别每次同一个句式。`);
       sysLines.push('少用括号里的动作描写（比如「尾巴一僵」），除非它真的给回复加分；多用自然口语、情绪词和停顿，像真人打字。');
     }
+    // 时间感（2026-10）：所有回复都带当前时刻与时段状态，语气/长短自然随时段变化
+    const now = new Date();
+    sysLines.push(`当前时间：${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}。${timeVibe(now.getHours())}；回复要贴合这个状态，长短句和语气有变化，别每次同一个句式。`);
     // 工具提示（仅在启用工具时注入）：告知模型可用能力与克制原则
     if (this.toolsEnabled && this.tools.length) {
       sysLines.push('工具：需要时可以调用工具（贴表情/发表情、查干员/藏品/卡池/群统计、查群历史记录、查或记用户记忆、改自己的昵称/签名/名片；文档与提示词读写仅限博士=主人）；表情类工具要克制，只在真的合适时用，不要为了用工具而用工具。');
@@ -1362,6 +1367,9 @@ export function createChatPlugin(deps) {
     else w.count++;
   }
 
+  /** 模型「不接」标记；容忍尾随标点/空白（2026-10：避免把「<NO_REPLY>。」发出去） */
+  const NO_REPLY_RE = /^\s*<NO_REPLY>[。.!！~～…\s]*$/i;
+
   // ---- 像真人打字：把回复拆成 1-3 条短消息，并加一点「思考/打字」延迟 ----
   const humanizeCfg = deps.humanize || {};
   const humanizeOn = humanizeCfg.enabled === true;
@@ -1370,17 +1378,17 @@ export function createChatPlugin(deps) {
   const maxBubbles = Math.max(1, Number(humanizeCfg.maxBubbles ?? 3));
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-  /** 按句子切成 1..maxBubbles 条；短的（≤60 字）不拆，拆开后拼回与原文一致 */
+  /** 按句子切成 1..maxBubbles 条；短的（≤40 字）不拆，拆开后拼回与原文一致 */
   function splitBubbles(text, max = maxBubbles) {
     const s = String(text ?? '').trim();
     if (!s) return [];
-    if (s.length <= 60) return [s];
+    if (s.length <= 40) return [s];
     const parts = s.split(/(?<=[。！？!?～~…])/).map((p) => p.trim()).filter(Boolean);
     if (parts.length <= 1) return [s];
     const out = [];
     let cur = '';
     for (const p of parts) {
-      if (cur && (cur + p).length > 60) {
+      if (cur && (cur + p).length > 40) {
         out.push(cur);
         cur = p;
       } else {
@@ -1392,14 +1400,23 @@ export function createChatPlugin(deps) {
     return [...out.slice(0, max - 1), out.slice(max - 1).join('')];
   }
 
+  /** 在基准上抖动 ±20%，避免每条都同一节奏（视觉上更像人在打字而不是定时器） */
+  function jitter(ms) {
+    if (!ms) return 0;
+    return Math.round(ms * (0.8 + Math.random() * 0.4));
+  }
+
   /** 发一条回复：分条 + 停顿（humanize 关闭时退回纯切条、零延迟） */
-  async function deliver(ctx, text, { at = false } = {}) {
+  async function deliver(ctx, text, { at = false, question = '' } = {}) {
     const bubbles = humanizeOn ? splitBubbles(text) : splitMessage(text);
+    // 先「读」再「打字」：问题越长，首条消息来得越晚（封顶 1.2s，再受 maxDelay 约束）
+    const readMs = Math.min(1200, String(question || '').length * 20);
     for (let i = 0; i < bubbles.length; i++) {
       if (humanizeOn) {
-        const base = i === 0 ? minDelay : minDelay * 0.8;
+        const base = i === 0 ? minDelay + readMs : minDelay * 0.8;
         const delay = Math.min(maxDelay, base + Math.min(bubbles[i].length, 80) * 12);
-        if (delay > 0) await sleep(delay);
+        const wait = jitter(delay);
+        if (wait > 0) await sleep(wait);
       }
       if (i === 0 && at) await client.sendGroupMsgAt(ctx.groupId, ctx.userId, bubbles[i]);
       else await client.sendGroupMsg(ctx.groupId, bubbles[i]);
@@ -1424,13 +1441,17 @@ export function createChatPlugin(deps) {
         busyGroups.add(gid);
         brain.chat(ctx.groupId, ctx.userName, String(ctx.text || '').trim(), ctx.userId, {
           messageId: ctx.messageId, faces: ctx.faces, autoSpeak: true, recent,
-        }).then((reply) => {
-          busyGroups.delete(gid);
-          // 模型自己判断「不接」：约定输出 <NO_REPLY>
-          if (!reply || /^\s*<NO_REPLY>\s*$/i.test(reply)) return;
-          const safe = isSensitiveOutbound(reply) ? '这个话题我不太方便聊，我们换个话题吧~' : reply;
-          noteSpoken(gid);
-          return deliver(ctx, safe).catch((e) => err(`[chat] 群 ${ctx.groupId} 接话发送失败:`, e.message));
+        }).then(async (reply) => {
+          try {
+            // 模型自己判断「不接」：约定输出 <NO_REPLY>（容忍尾随标点）
+            if (!reply || NO_REPLY_RE.test(reply)) return;
+            const safe = isSensitiveOutbound(reply) ? '这个话题我不太方便聊，我们换个话题吧~' : reply;
+            noteSpoken(gid);
+            await deliver(ctx, safe, { question: ctx.text })
+              .catch((e) => err(`[chat] 群 ${ctx.groupId} 接话发送失败:`, e.message));
+          } finally {
+            busyGroups.delete(gid); // 分条发完才释放：避免两轮接话的短句交错
+          }
         }).catch((e) => {
           busyGroups.delete(gid);
           err(`[chat] 群 ${ctx.groupId} 接话失败:`, e.message);
@@ -1447,7 +1468,7 @@ export function createChatPlugin(deps) {
           // 风控降险：出站内容敏感词兜底——命中隐私/违禁关键词时替换为安全文案，不发送原文
           const safe = isSensitiveOutbound(reply) ? '这个话题我不太方便聊，我们换个话题吧~' : reply;
           // 像真人打字：拆 1-3 条短消息 + 停顿；第一条按规则真 @（免 @ 群/关闭 replyAtUser 时纯文本）
-          await deliver(ctx, safe, { at: !!(ctx.userId && !ctx.noAt) });
+          await deliver(ctx, safe, { at: !!(ctx.userId && !ctx.noAt), question: ctx.text });
         })
         .catch((e) => err(`[chat] 群 ${ctx.groupId} 发送失败:`, e.message));
       return true;
