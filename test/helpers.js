@@ -14,6 +14,13 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
+// 日志隔离兜底（2026-10）：logger 默认写项目根 logs/。正常经 `npm test`
+// （test/log-isolation.mjs 预加载）已指到临时目录；这里再兜一层，保证直接
+// `node --test test/xxx.test.js` 或单文件运行时也不会污染生产日志。
+if (!process.env.LOG_DIR) {
+  process.env.LOG_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'qqbot-test-logs-'));
+}
+
 /**
  * 临时目录登记表：同文件内 makeTmp 建出的目录都排在此队，由文件级
  * cleanupTmpDirs()（after 钩子）统一逆序清理——先跑目录的关闭器（如 SQLite

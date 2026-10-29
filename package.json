@@ -10,7 +10,7 @@
   },
   "scripts": {
     "start": "node src/index.js",
-    "test": "node --test \"test/**/*.test.js\""
+    "test": "node --import ./test/log-isolation.mjs --test \"test/**/*.test.js\""
   },
   "dependencies": {
     "ws": "^8.18.0"

@@ -13,7 +13,12 @@
  * lifecycle/disconnect 事件供 S1 复位 wsConnected（2026-09 修复，见 §8 坑 2）。
  */
 import WebSocket from 'ws';
-import { log } from './logger.js';
+import { log, err } from './logger.js';
+
+// 连接日志里打码 access_token（2026-10：原实现把明文 token 写进日志）
+function maskToken(url) {
+  return String(url).replace(/([?&]access_token=)[^&]*/i, '$1***');
+}
 
 /**
  * OneBot 11 正向 WS 客户端：事件推送（onEvent 回调）与出站调用（call）的一体封装，
@@ -77,7 +82,7 @@ export class NapCatClient {
       : this.url;
     this.ws = new WebSocket(wsUrl);
     this.ws.on('open', () => {
-      log(`[napcat] 已连接 ${wsUrl}`);
+      log(`[napcat] 已连接 ${maskToken(wsUrl)}`);
       // 退避不在 open 时立刻复位：对端「连上就断」（NapCat 重启/鉴权失败）会让退避永远停在
       // 起点，退化成 3s 高频重连（2026-09 曾单日 1.5 万次）。连接稳定 resetBackoffAfterMs
       // 后才复位；中途断开则继续按之前的延迟翻倍。
@@ -89,7 +94,7 @@ export class NapCatClient {
       this.emit({ post_type: 'meta_event', meta_event_type: 'lifecycle', sub_type: 'connect' });
     });
     this.ws.on('message', (data) => this._onMessage(data));
-    this.ws.on('error', (e) => console.error('[napcat] ws error:', e.message));
+    this.ws.on('error', (e) => err('[napcat] ws error:', e.message));
     this.ws.on('close', () => {
       clearTimeout(this._stableTimer);
       if (this.closed) return;
@@ -146,9 +151,9 @@ export class NapCatClient {
   emit(event) {
     for (const h of this.handlers) {
       try {
-        Promise.resolve(h(event)).catch((e) => console.error(e));
+        Promise.resolve(h(event)).catch((e) => err('[napcat] 事件处理异常:', e?.stack || e));
       } catch (e) {
-        console.error(e);
+        err('[napcat] 事件处理异常:', e?.stack || e);
       }
     }
   }
