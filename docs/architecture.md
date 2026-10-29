@@ -248,3 +248,5 @@ filter.js 零 import；plugins 间零互 import（服务一律经 createApp 注�
 28. **消息 id 兜底与写盘顺序（2026-10）**：缺 `message_id` 的实时消息用「时间 + 用户 + 文本 hash」合成 id（原来全部折叠成 "undefined" 只入第一条）；`_commit` 改为先 `appendFileSync` 成功、再推进内存与 lastSeen 水位（写失败不再留下永久缺口，backfill 仍可补回）。
 
 29. **日报启动补跑（2026-10）**：`data/state/report.json` 记 `lastReportDate`；启动/断线错过 9:00 时由 report 插件定时检查补跑一次，同日不重复（详见 §6.2）。
+
+30. **MAA 模拟器自动启动（2026-10）**：worker 的 `/task` 先返回 `state=launching` 的 job（HTTP 不再卡在模拟器启动上），后台线程 `ensure_emulator()`：连接失败 → 按 `--emulator-cmd`（缺省自动探测 adb 同目录 `MuMuManager.exe control -v 0 launch`）拉起模拟器 → 每 3s 重试 adb/AsstConnect 直到 `--emulator-wait` 秒 → 追加 MAA 任务并 `AsstStart`。launching 阶段 `stop` 不会提交任务；maa 插件的 `watchJob` 把 `launching` 视为进行中，`maa 状态` 显示「正在启动模拟器/游戏」。**StartUp 任务必须带 `start_game_enabled: true`**（MAA API 缺省 false，只等界面不拉起游戏；worker 对 StartUp 参数自动补齐，插件显式传值）。

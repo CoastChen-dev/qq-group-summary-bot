@@ -74,6 +74,8 @@
 | `maa.workerPort` | number | `0` | MaaBridge | worker 端口（0 = 系统分配） |
 | `maa.taskTimeoutMinutes` | number | `60` | worker.py | 单任务超时后自动停止 |
 | `maa.pollIntervalSeconds` | number | `2` | maa 插件 | 结果轮询间隔（秒） |
+| `maa.emulatorCommand` | string[] | `[]`（自动探测） | worker.py | 设备未连接时的模拟器启动命令（argv）；空 = 自动探测 `adbPath` 同目录的 `MuMuManager.exe`（`control -v 0 launch`） |
+| `maa.emulatorWaitSeconds` | number | `120` | worker.py | 启动模拟器后等待 adb 连上的秒数（超时则任务报错） |
 
 ## llm.* 块（一个块喂给 Summarizer 与 ChatBrain 两个消费者）
 
